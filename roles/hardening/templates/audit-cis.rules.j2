@@ -1,0 +1,91 @@
+## {{ hardening_managed_comment }}
+##
+## CIS Rocky Linux 9 v2.0.0 - 6.3.3 audit rules (Level 2 in CIS; included
+## because system auditing is a mandatory control of the assignment).
+## Syscall names unknown to this architecture are dropped automatically
+## (they are filtered against "ausyscall --dump").
+{% macro syscall_rule(names, fields, key) -%}
+{%- set rules = [] -%}
+{%- for arch, table in hardening_audit_arches.items() -%}
+{%-   set known = names | intersect(table) -%}
+{%-   if known | length > 0 -%}
+{%-     set _ = rules.append('-a always,exit -F arch=' ~ arch ~ ' -S ' ~ (known | join(',')) ~ ((' ' ~ fields) if fields else '') ~ ' -k ' ~ key) -%}
+{%-   endif -%}
+{%- endfor -%}
+{{ rules | join('\n') }}
+{%- endmacro %}
+{% set user_filter = '-F auid>=' ~ hardening_uid_min ~ ' -F auid!=unset' %}
+
+## 6.3.3.1 Changes to system administration scope (sudoers)
+-w /etc/sudoers -p wa -k scope
+-w /etc/sudoers.d -p wa -k scope
+
+## 6.3.3.2 Actions as another user
+{% for arch in hardening_audit_arches %}
+-a always,exit -F arch={{ arch }} -C euid!=uid -F auid!=unset -S execve -k user_emulation
+{% endfor %}
+
+## 6.3.3.3 Changes to the sudo log file
+-w {{ hardening_sudo_logfile }} -p wa -k sudo_log_file
+
+## 6.3.3.4 Date and time changes
+{{ syscall_rule(['adjtimex', 'settimeofday', 'clock_settime'], '', 'time-change') }}
+-w /etc/localtime -p wa -k time-change
+
+## 6.3.3.5 Network environment changes
+{{ syscall_rule(['sethostname', 'setdomainname'], '', 'system-locale') }}
+-w /etc/issue -p wa -k system-locale
+-w /etc/issue.net -p wa -k system-locale
+-w /etc/hosts -p wa -k system-locale
+-w /etc/hostname -p wa -k system-locale
+-w /etc/sysconfig/network -p wa -k system-locale
+-w /etc/sysconfig/network-scripts/ -p wa -k system-locale
+-w /etc/NetworkManager -p wa -k system-locale
+
+## 6.3.3.7 Unsuccessful file access attempts
+{{ syscall_rule(['creat', 'open', 'openat', 'truncate', 'ftruncate'], '-F exit=-EACCES ' ~ user_filter, 'access') }}
+{{ syscall_rule(['creat', 'open', 'openat', 'truncate', 'ftruncate'], '-F exit=-EPERM ' ~ user_filter, 'access') }}
+
+## 6.3.3.8 User / group information changes
+-w /etc/group -p wa -k identity
+-w /etc/passwd -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/security/opasswd -p wa -k identity
+-w /etc/nsswitch.conf -p wa -k identity
+-w /etc/pam.conf -p wa -k identity
+-w /etc/pam.d -p wa -k identity
+
+## 6.3.3.9 Discretionary access control permission changes
+{{ syscall_rule(['chmod', 'fchmod', 'fchmodat'], user_filter, 'perm_mod') }}
+{{ syscall_rule(['chown', 'fchown', 'lchown', 'fchownat'], user_filter, 'perm_mod') }}
+{{ syscall_rule(['setxattr', 'lsetxattr', 'fsetxattr', 'removexattr', 'lremovexattr', 'fremovexattr'], user_filter, 'perm_mod') }}
+
+## 6.3.3.10 Successful file system mounts
+{{ syscall_rule(['mount'], user_filter, 'mounts') }}
+
+## 6.3.3.11 Session initiation
+-w /var/run/utmp -p wa -k session
+-w /var/log/wtmp -p wa -k session
+-w /var/log/btmp -p wa -k session
+
+## 6.3.3.12 Login and logout events
+-w /var/log/lastlog -p wa -k logins
+-w /var/run/faillock -p wa -k logins
+
+## 6.3.3.13 File deletion by users ([extra] renameat2 is used by current coreutils "mv")
+{{ syscall_rule(['rename', 'unlink', 'unlinkat', 'renameat', 'renameat2'], user_filter, 'delete') }}
+
+## 6.3.3.14 Mandatory Access Control changes
+-w /etc/selinux -p wa -k MAC-policy
+-w /usr/share/selinux -p wa -k MAC-policy
+
+## 6.3.3.15-6.3.3.18 chcon / setfacl / chacl / usermod
+-a always,exit -F path=/usr/bin/chcon -F perm=x {{ user_filter }} -k perm_chng
+-a always,exit -F path=/usr/bin/setfacl -F perm=x {{ user_filter }} -k perm_chng
+-a always,exit -F path=/usr/bin/chacl -F perm=x {{ user_filter }} -k perm_chng
+-a always,exit -F path=/usr/sbin/usermod -F perm=x {{ user_filter }} -k usermod
+
+## 6.3.3.19 Kernel module loading / unloading
+{{ syscall_rule(['init_module', 'finit_module', 'delete_module', 'create_module', 'query_module'], user_filter, 'kernel_modules') }}
+-a always,exit -F path=/usr/bin/kmod -F perm=x {{ user_filter }} -k kernel_modules

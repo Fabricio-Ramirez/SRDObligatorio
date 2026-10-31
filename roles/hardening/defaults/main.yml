@@ -1,0 +1,369 @@
+---
+# =============================================================================
+# Rocky Linux 9 hardening role - default variables
+#
+# Baseline: CIS Rocky Linux 9 Benchmark v2.0.0 - Level 1 Server
+# (same structure and numbering as CIS Red Hat Enterprise Linux 9 v2.0.0).
+# Controls outside Level 1 are explicitly marked "[L2]" or "[extra]" and are
+# included only when the assignment requires them (e.g. system auditing).
+#
+# Override any value in group_vars/, host_vars/ or with --extra-vars.
+# =============================================================================
+
+# Header written in every file this role manages.
+hardening_managed_comment: "Managed by Ansible (role: hardening) - local changes will be overwritten"
+
+# -----------------------------------------------------------------------------
+# Preflight
+# -----------------------------------------------------------------------------
+hardening_supported_distributions: ["Rocky"]
+hardening_supported_major_versions: ["9"]
+
+# Abort when the SSH settings below would lock every administrator out.
+hardening_preflight_ssh_lockout_check: true
+
+# First UID of regular (human) users, as in /etc/login.defs.
+hardening_uid_min: 1000
+
+# -----------------------------------------------------------------------------
+# Sections (set to false to skip a whole section; tags with the same name exist)
+# -----------------------------------------------------------------------------
+hardening_packages_enabled: true
+hardening_filesystem_enabled: true
+hardening_bootloader_enabled: true
+hardening_selinux_enabled: true
+hardening_process_enabled: true
+hardening_crypto_policy_enabled: true
+hardening_banners_enabled: true
+hardening_services_enabled: true
+hardening_sysctl_enabled: true
+hardening_firewall_enabled: true
+hardening_ssh_enabled: true
+hardening_sudo_enabled: true
+hardening_pam_enabled: true
+hardening_accounts_enabled: true
+hardening_logging_enabled: true
+hardening_auditd_enabled: true
+hardening_siem_enabled: true
+hardening_file_permissions_enabled: true
+hardening_aide_enabled: true
+
+# -----------------------------------------------------------------------------
+# 1.2 Package management
+# -----------------------------------------------------------------------------
+# CIS 1.2.2.1 - install pending updates during the run.
+hardening_apply_updates: true
+hardening_updates_security_only: false
+
+# [extra] Automatic security updates with dnf-automatic.
+hardening_dnf_automatic: true
+
+# CIS 2.1.x / 2.2.x / 3.1.3 / 1.3.1.7 / 1.3.1.8 - services and clients that a
+# base server must not have. Add a package here (or remove it) per server role,
+# e.g. a web server must drop "httpd"/"nginx" from this list.
+hardening_packages_absent:
+  - autofs           # 2.1.1
+  - avahi            # 2.1.2
+  - dhcp-server      # 2.1.3
+  - bind             # 2.1.4
+  - dnsmasq          # 2.1.5
+  - samba            # 2.1.6
+  - vsftpd           # 2.1.7
+  - dovecot          # 2.1.8
+  - cyrus-imapd      # 2.1.8
+  - nfs-utils        # 2.1.9
+  - ypserv           # 2.1.10
+  - cups             # 2.1.11
+  - rpcbind          # 2.1.12
+  - rsync-daemon     # 2.1.13
+  - net-snmp         # 2.1.14
+  - telnet-server    # 2.1.15
+  - tftp-server      # 2.1.16
+  - squid            # 2.1.17
+  - httpd            # 2.1.18
+  - nginx            # 2.1.18
+  - xinetd           # 2.1.19
+  - ftp              # 2.2.1
+  - ypbind           # 2.2.3
+  - telnet           # 2.2.4
+  - tftp             # 2.2.5
+  - bluez            # 3.1.3
+  - mcstrans         # 1.3.1.7
+  - setroubleshoot   # 1.3.1.8
+  - abrt             # [extra] automatic crash reporting
+
+# -----------------------------------------------------------------------------
+# 1.1 Filesystem
+# -----------------------------------------------------------------------------
+# CIS 1.1.1.1-1.1.1.5, 1.1.1.8 - kernel modules that must not be loadable.
+# [L2] modules (squashfs, udf, dccp, tipc, rds, sctp) can be appended here.
+hardening_disabled_kernel_modules:
+  - cramfs
+  - freevxfs
+  - hfs
+  - hfsplus
+  - jffs2
+  - usb-storage
+
+# CIS 1.1.2.x - mount options enforced on every mount point below that exists
+# as a separate entry in /etc/fstab.
+hardening_mount_options:
+  /tmp: [nodev, nosuid, noexec]
+  /dev/shm: [nodev, nosuid, noexec]
+  /home: [nodev, nosuid]
+  /var: [nodev, nosuid]
+  /var/tmp: [nodev, nosuid, noexec]
+  /var/log: [nodev, nosuid, noexec]
+  /var/log/audit: [nodev, nosuid, noexec]
+
+# CIS 1.1.2.1.1 - when /tmp is not a separate partition, add a tmpfs /tmp to
+# /etc/fstab (takes effect after the next reboot). Empty size = tmpfs default.
+hardening_tmp_tmpfs: true
+hardening_tmp_tmpfs_size: ""
+
+# -----------------------------------------------------------------------------
+# 1.3 SELinux
+# -----------------------------------------------------------------------------
+# CIS 1.3.1.4 [L1] requires "not disabled"; 1.3.1.5 [L2] requires "enforcing".
+hardening_selinux_state: enforcing
+hardening_selinux_policy: targeted
+
+# -----------------------------------------------------------------------------
+# 1.4 Bootloader
+# -----------------------------------------------------------------------------
+# CIS 1.4.1 - GRUB2 password. Generate the hash on the server with
+#   grub2-mkpasswd-pbkdf2
+# and store it with ansible-vault. Empty = not configured (reported at the end).
+hardening_grub_password_pbkdf2: ""
+
+# Kernel command line arguments (CIS 1.3.1.2, 6.3.1.2, 6.3.1.3).
+hardening_kernel_args_absent: ["selinux=0", "enforcing=0"]
+hardening_kernel_args_present: ["audit=1", "audit_backlog_limit=8192"]
+
+# -----------------------------------------------------------------------------
+# 1.6 System-wide crypto policy
+# -----------------------------------------------------------------------------
+# CIS 1.6.3 NO-SHA1 (shipped by the OS), 1.6.4 NO-WEAKMAC, 1.6.5 NO-SSHCBC,
+# 1.6.6 NO-SSHCHACHA20, 1.6.7 NO-SSHETM, plus NO-SSHWEAKMACS for 5.1.6.
+hardening_crypto_policy: "DEFAULT:NO-SHA1:NO-WEAKMAC:NO-SSHCBC:NO-SSHCHACHA20:NO-SSHETM:NO-SSHWEAKMACS"
+hardening_crypto_policy_modules:
+  - name: NO-WEAKMAC
+    comment: "CIS 1.6.4 - disable MACs shorter than 128 bits"
+    rule: "mac = -*-64*"
+  - name: NO-SSHCBC
+    comment: "CIS 1.6.5 - disable CBC mode ciphers for SSH"
+    rule: "cipher@SSH = -*-CBC"
+  - name: NO-SSHCHACHA20
+    comment: "CIS 1.6.6 - disable chacha20-poly1305 for SSH (CVE-2023-48795)"
+    rule: "cipher@SSH = -CHACHA20-POLY1305"
+  - name: NO-SSHETM
+    comment: "CIS 1.6.7 - disable Encrypt-then-MAC for SSH (CVE-2023-48795)"
+    rule: "etm@SSH = DISABLE_ETM"
+  - name: NO-SSHWEAKMACS
+    comment: "CIS 5.1.6 - keep only HMAC-SHA2 MACs for SSH"
+    rule: "mac@SSH = -HMAC-MD5* -UMAC-64* -UMAC-128* -HMAC-SHA1*"
+
+# -----------------------------------------------------------------------------
+# 1.7 Warning banners
+# -----------------------------------------------------------------------------
+hardening_banner_text: |
+  ******************************************************************************
+  *  AVISO: Sistema de uso exclusivo de Corporacion de Generacion S.A. (cdg.uy) *
+  *  El acceso esta restringido a personal autorizado. Toda actividad en este  *
+  *  sistema es monitoreada y registrada. El uso no autorizado sera denunciado *
+  *  ante las autoridades competentes.                                         *
+  ******************************************************************************
+
+# -----------------------------------------------------------------------------
+# 2.x Services
+# -----------------------------------------------------------------------------
+# CIS 2.3.2 - extra NTP servers (the distribution pool stays in place).
+hardening_ntp_servers: []
+
+# CIS 2.4.1.8 / 2.4.2.1 - users allowed to use crontab / at.
+hardening_cron_allow_users: [root]
+
+# CIS 2.1.21 - force the MTA (if installed) to listen on loopback only.
+hardening_postfix_loopback_only: true
+
+# -----------------------------------------------------------------------------
+# 1.5 / 3.3 Kernel parameters (sysctl)
+# -----------------------------------------------------------------------------
+# Set to true ONLY on routers, VPN gateways or container hosts (CIS 3.3.1).
+hardening_ip_forwarding: false
+
+hardening_sysctl_file: /etc/sysctl.d/60-cis-hardening.conf
+hardening_sysctl:
+  kernel.randomize_va_space: 2                    # 1.5.1
+  kernel.yama.ptrace_scope: 1                     # 1.5.2
+  fs.suid_dumpable: 0                             # 1.5.3
+  net.ipv4.ip_forward: "{{ 1 if hardening_ip_forwarding else 0 }}"  # 3.3.1
+  net.ipv4.conf.all.send_redirects: 0             # 3.3.2
+  net.ipv4.conf.default.send_redirects: 0         # 3.3.2
+  net.ipv4.icmp_ignore_bogus_error_responses: 1   # 3.3.3
+  net.ipv4.icmp_echo_ignore_broadcasts: 1         # 3.3.4
+  net.ipv4.conf.all.accept_redirects: 0           # 3.3.5
+  net.ipv4.conf.default.accept_redirects: 0       # 3.3.5
+  net.ipv4.conf.all.secure_redirects: 0           # 3.3.6
+  net.ipv4.conf.default.secure_redirects: 0       # 3.3.6
+  net.ipv4.conf.all.rp_filter: 1                  # 3.3.7
+  net.ipv4.conf.default.rp_filter: 1              # 3.3.7
+  net.ipv4.conf.all.accept_source_route: 0        # 3.3.8
+  net.ipv4.conf.default.accept_source_route: 0    # 3.3.8
+  net.ipv4.conf.all.log_martians: 1               # 3.3.9
+  net.ipv4.conf.default.log_martians: 1           # 3.3.9
+  net.ipv4.tcp_syncookies: 1                      # 3.3.10
+
+# Applied only when the kernel has IPv6 enabled.
+hardening_sysctl_ipv6:
+  net.ipv6.conf.all.forwarding: "{{ 1 if hardening_ip_forwarding else 0 }}"  # 3.3.1
+  net.ipv6.conf.all.accept_redirects: 0           # 3.3.5
+  net.ipv6.conf.default.accept_redirects: 0       # 3.3.5
+  net.ipv6.conf.all.accept_source_route: 0        # 3.3.8
+  net.ipv6.conf.default.accept_source_route: 0    # 3.3.8
+  net.ipv6.conf.all.accept_ra: 0                  # 3.3.11
+  net.ipv6.conf.default.accept_ra: 0              # 3.3.11
+
+# -----------------------------------------------------------------------------
+# 4 Host based firewall (firewalld)
+# -----------------------------------------------------------------------------
+hardening_firewall_zone: public
+# CIS 4.2.1 - only what the server really needs. Per-role services/ports go in
+# group_vars (e.g. ["443/tcp"] for a web server, ["1514/tcp","1515/tcp"] for
+# the Wazuh manager).
+hardening_firewall_allowed_services: [ssh]
+hardening_firewall_allowed_ports: []
+hardening_firewall_removed_services: [cockpit, dhcpv6-client]
+hardening_firewall_rich_rules: []
+# Secure administrative access: when not empty, SSH is accepted ONLY from these
+# networks (bastion / jump server / admin VPN), e.g. ["10.10.0.0/24"].
+hardening_ssh_allowed_networks: []
+# [extra] Log rejected packets so the SIEM can see them: off, all, unicast,
+# broadcast or multicast.
+hardening_firewall_log_denied: unicast
+
+# -----------------------------------------------------------------------------
+# 5.1 SSH server
+# -----------------------------------------------------------------------------
+# CIS 5.1.7 - only members of these groups may log in over SSH.
+# The preflight aborts if no non-root user belongs to them.
+hardening_ssh_allow_groups: [wheel]
+hardening_ssh_log_level: VERBOSE                  # 5.1.15
+hardening_ssh_max_auth_tries: 4                   # 5.1.16
+hardening_ssh_max_startups: "10:30:60"            # 5.1.17
+hardening_ssh_max_sessions: 10                    # 5.1.18
+hardening_ssh_login_grace_time: 60                # 5.1.14
+hardening_ssh_client_alive_interval: 15           # 5.1.9
+hardening_ssh_client_alive_count_max: 3           # 5.1.9
+# [extra] key-only logins. The preflight checks that at least one allowed
+# administrator has an authorized_keys file before disabling passwords.
+hardening_ssh_password_authentication: false
+# Keyboard-interactive is needed only for PAM based MFA (e.g. TOTP via the IdP).
+hardening_ssh_kbd_interactive_authentication: false
+# [L2] 5.1.10 / 5.1.11. A bastion / jump host needs forwarding, so set
+# hardening_ssh_disable_forwarding: false in that host's host_vars.
+hardening_ssh_disable_forwarding: true
+hardening_ssh_gssapi_authentication: false
+
+# -----------------------------------------------------------------------------
+# 5.2 sudo / su
+# -----------------------------------------------------------------------------
+hardening_sudo_logfile: /var/log/sudo.log         # 5.2.3
+hardening_sudo_timestamp_timeout: 15              # 5.2.6
+hardening_su_group: sugroup                       # 5.2.7 (empty group)
+
+# -----------------------------------------------------------------------------
+# 5.3 PAM / 5.4 accounts
+# -----------------------------------------------------------------------------
+# Profile selected only when the system has no authselect profile at all.
+hardening_authselect_profile: sssd
+hardening_authselect_features: [with-faillock, with-pwhistory, without-nullok]
+
+hardening_faillock_deny: 5                        # 5.3.3.1.1
+hardening_faillock_unlock_time: 900               # 5.3.3.1.2
+
+hardening_pwquality:                              # 5.3.3.2.x
+  minlen: 14
+  minclass: 4
+  difok: 2
+  maxrepeat: 3
+  maxsequence: 3
+  dictcheck: 1
+hardening_pwhistory_remember: 24                  # 5.3.3.3.1
+
+hardening_pass_max_days: 365                      # 5.4.1.1
+hardening_pass_min_days: 1                        # 5.4.1.2 [L2]
+hardening_pass_warn_age: 7                        # 5.4.1.3
+hardening_encrypt_method: SHA512                  # 5.4.1.4
+hardening_inactive_days: 30                       # 5.4.1.5
+# Apply the aging values above to the accounts that already exist.
+hardening_apply_aging_to_existing_users: true
+
+hardening_shell_timeout: 900                      # 5.4.3.2
+hardening_umask: "027"                            # 5.4.2.6 / 5.4.3.3
+
+# Accounts below UID_MIN that keep their shell (CIS 5.4.2.7 exceptions).
+hardening_system_accounts_keep_shell: [root, sync, shutdown, halt]
+
+# -----------------------------------------------------------------------------
+# 6.2 Logging
+# -----------------------------------------------------------------------------
+hardening_journald_system_max_use: 1G             # 6.2.1.3
+hardening_rsyslog_file_create_mode: "0640"        # 6.2.3.4
+# CIS 6.2.4.1 - remove "other" permissions from files in /var/log.
+hardening_logfiles_remove_other_permissions: true
+
+# -----------------------------------------------------------------------------
+# 6.3 Auditing (auditd) - [L2] in CIS, required by the assignment
+# -----------------------------------------------------------------------------
+hardening_auditd_conf:
+  max_log_file: 32                                # 6.3.2.1 (MB)
+  num_logs: 10
+  # CIS 6.3.2.2 asks for keep_logs. Logs are shipped to the SIEM, so local
+  # rotation avoids filling the disk of lab VMs. Set keep_logs to follow CIS.
+  max_log_file_action: rotate
+  space_left_action: email                        # 6.3.2.4
+  action_mail_acct: root                          # 6.3.2.4
+  admin_space_left_action: single                 # 6.3.2.4
+  disk_full_action: single                        # 6.3.2.3
+  disk_error_action: syslog                       # 6.3.2.3
+# CIS 6.3.3.20 - "-e 2": rules can only change after a reboot.
+hardening_audit_immutable: true
+
+# -----------------------------------------------------------------------------
+# SIEM integration (assignment requirement 1.4)
+# -----------------------------------------------------------------------------
+# wazuh  -> install and enrol the Wazuh agent (recommended)
+# syslog -> forward every log (including auditd) with rsyslog
+# none   -> no SIEM integration
+hardening_siem_type: wazuh
+hardening_siem_host: ""          # IP / FQDN of the Wazuh manager or syslog collector
+
+# Wazuh agent. The agent must not be newer than the manager.
+hardening_wazuh_repo_baseurl: https://packages.wazuh.com/4.x/yum/
+hardening_wazuh_gpg_key: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+hardening_wazuh_agent_version: ""                 # e.g. "4.12.0-1"; empty = latest
+hardening_wazuh_agent_name: "{{ ansible_facts['hostname'] }}"
+hardening_wazuh_agent_group: default
+hardening_wazuh_registration_password: ""         # use ansible-vault
+hardening_wazuh_extra_localfiles:
+  - location: /var/log/audit/audit.log
+    format: audit
+  - location: "{{ hardening_sudo_logfile }}"
+    format: syslog
+
+# Syslog forwarding
+hardening_siem_syslog_port: 514
+hardening_siem_syslog_protocol: tcp
+
+# -----------------------------------------------------------------------------
+# 6.1 AIDE
+# -----------------------------------------------------------------------------
+hardening_aide_cron_schedule: "0 5 * * *"         # 6.1.2
+hardening_aide_audit_tools:                       # 6.1.3
+  - /usr/sbin/auditctl
+  - /usr/sbin/auditd
+  - /usr/sbin/ausearch
+  - /usr/sbin/aureport
+  - /usr/sbin/autrace
+  - /usr/sbin/augenrules

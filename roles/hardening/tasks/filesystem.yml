@@ -1,0 +1,92 @@
+---
+# --- 1.1.1 Kernel modules ----------------------------------------------------
+- name: CIS 1.1.1.x | Ensure unneeded filesystem kernel modules are not available
+  ansible.builtin.template:
+    src: modprobe-cis.conf.j2
+    dest: /etc/modprobe.d/cis-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: CIS 1.1.1.x | List loaded kernel modules
+  ansible.builtin.command: lsmod
+  register: hardening_lsmod
+  changed_when: false
+  check_mode: false
+
+- name: CIS 1.1.1.x | Unload disabled kernel modules that are currently loaded
+  ansible.builtin.command: "modprobe -r {{ item }}"
+  loop: "{{ hardening_disabled_kernel_modules }}"
+  when: (item | replace('-', '_')) in (hardening_lsmod.stdout_lines[1:] | map('split') | map('first') | list)
+  register: hardening_modprobe_remove
+  changed_when: hardening_modprobe_remove.rc == 0
+  # A module in use cannot be unloaded; it will not load again after a reboot.
+  failed_when: false
+
+# --- 1.1.2 Partitions and mount options -------------------------------------
+- name: CIS 1.1.2.x | Read /etc/fstab
+  ansible.builtin.slurp:
+    src: /etc/fstab
+  register: hardening_fstab
+
+# Each entry: [source, mount point, fstype, options, dump, passno]
+- name: CIS 1.1.2.x | Parse /etc/fstab
+  ansible.builtin.set_fact:
+    hardening_fstab_entries: >-
+      {{ hardening_fstab.content | b64decode
+         | regex_findall('(?m)^[ \t]*([^#\s]\S*)[ \t]+(\S+)[ \t]+(\S+)[ \t]+(\S+)[ \t]*(\S*)[ \t]*(\S*)') }}
+
+- name: CIS 1.1.2.x | Ensure nodev/nosuid/noexec on existing separate partitions
+  ansible.posix.mount:
+    path: "{{ item[1] }}"
+    src: "{{ item[0] }}"
+    fstype: "{{ item[2] }}"
+    opts: "{{ ((item[3].split(',') | reject('in', ['dev', 'suid', 'exec']) | list) + hardening_mount_options[item[1]]) | unique | join(',') }}"
+    dump: "{{ item[4] | default('0', true) }}"
+    passno: "{{ item[5] | default('0', true) }}"
+    state: mounted
+  loop: "{{ hardening_fstab_entries }}"
+  loop_control:
+    label: "{{ item[1] }}"
+  when: item[1] in hardening_mount_options
+  notify: Reload systemd
+
+- name: CIS 1.1.2.2 | Ensure /dev/shm is mounted with nodev,nosuid,noexec
+  ansible.posix.mount:
+    path: /dev/shm
+    src: tmpfs
+    fstype: tmpfs
+    opts: "{{ (['defaults'] + hardening_mount_options['/dev/shm']) | join(',') }}"
+    state: mounted
+  when: "'/dev/shm' not in (hardening_fstab_entries | map(attribute='1') | list)"
+  notify: Reload systemd
+
+# /tmp without an fstab entry: if it is already a tmpfs (tmp.mount unit) it is
+# remounted in place; otherwise the entry is only written to fstab, because
+# mounting a new tmpfs over a live /tmp would hide files that running
+# processes are using. It is then used from the next reboot.
+- name: CIS 1.1.2.1 | Ensure /tmp is a separate tmpfs partition
+  ansible.posix.mount:
+    path: /tmp
+    src: tmpfs
+    fstype: tmpfs
+    opts: >-
+      {{ (['defaults', 'mode=1777'] + hardening_mount_options['/tmp']
+          + (['size=' ~ hardening_tmp_tmpfs_size] if hardening_tmp_tmpfs_size | length > 0 else []))
+         | join(',') }}
+    state: "{{ 'mounted' if (_tmp_mount | length > 0) else 'present' }}"
+  vars:
+    _tmp_mount: "{{ ansible_facts['mounts'] | selectattr('mount', 'equalto', '/tmp') | list }}"
+  register: hardening_tmp_fstab
+  when:
+    - hardening_tmp_tmpfs | bool
+    - "'/tmp' not in (hardening_fstab_entries | map(attribute='1') | list)"
+    - _tmp_mount | rejectattr('fstype', 'equalto', 'tmpfs') | list | length == 0
+  notify: Reload systemd
+
+- name: CIS 1.1.2.1 | Flag reboot for the new /tmp mount
+  ansible.builtin.set_fact:
+    hardening_reboot_reasons: "{{ hardening_reboot_reasons + ['/tmp tmpfs mount added to /etc/fstab'] }}"
+  when:
+    - hardening_tmp_fstab is changed
+    - "'/tmp' not in (ansible_facts['mounts'] | map(attribute='mount') | list)"

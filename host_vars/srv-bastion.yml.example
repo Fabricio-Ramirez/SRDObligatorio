@@ -1,0 +1,11 @@
+---
+# Example host_vars for the bastion / jump server. Rename to
+# host_vars/<inventory_hostname>.yml (e.g. host_vars/srv-bastion.yml).
+
+# A jump host must allow TCP forwarding (ssh -J / ProxyJump), so the CIS
+# Level 2 control 5.1.10 (DisableForwarding) is relaxed ONLY on this host.
+hardening_ssh_disable_forwarding: false
+
+# The bastion is the entry point: it accepts SSH from the admin VPN/network,
+# while the other servers accept SSH only from the bastion.
+hardening_ssh_allowed_networks: ["10.0.99.0/24"]

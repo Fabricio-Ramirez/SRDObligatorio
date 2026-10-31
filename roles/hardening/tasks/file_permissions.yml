@@ -1,0 +1,65 @@
+---
+- name: CIS 7.1.1-7.1.10 | Find account database files
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+  loop:
+    - { path: /etc/passwd, mode: "0644" }          # 7.1.1
+    - { path: /etc/passwd-, mode: "0644" }         # 7.1.2
+    - { path: /etc/group, mode: "0644" }           # 7.1.3
+    - { path: /etc/group-, mode: "0644" }          # 7.1.4
+    - { path: /etc/shadow, mode: "0000" }          # 7.1.5
+    - { path: /etc/shadow-, mode: "0000" }         # 7.1.6
+    - { path: /etc/gshadow, mode: "0000" }         # 7.1.7
+    - { path: /etc/gshadow-, mode: "0000" }        # 7.1.8
+    - { path: /etc/shells, mode: "0644" }          # 7.1.9
+    - { path: /etc/security/opasswd, mode: "0600" } # 7.1.10
+  loop_control:
+    label: "{{ item.path }}"
+  register: hardening_system_files_stat
+
+- name: CIS 7.1.1-7.1.10 | Ensure permissions on account database files
+  ansible.builtin.file:
+    path: "{{ item.item.path }}"
+    owner: root
+    group: root
+    mode: "{{ item.item.mode }}"
+  loop: "{{ hardening_system_files_stat.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+  when: item.stat.exists
+
+- name: CIS 7.1.11 / 7.1.12 | List local disk file systems
+  ansible.builtin.set_fact:
+    hardening_local_mounts: >-
+      {{ (['/'] + (ansible_facts['mounts'] | selectattr('fstype', 'in', ['xfs', 'ext4', 'ext3', 'btrfs'])
+         | map(attribute='mount') | list)) | unique }}
+
+- name: CIS 7.1.11 | Find world-writable directories without the sticky bit
+  ansible.builtin.command: >-
+    find {{ hardening_local_mounts | join(' ') }} -xdev -type d -perm -0002 ! -perm -1000
+  register: hardening_ww_dirs
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: CIS 7.1.11 | Ensure the sticky bit on world-writable directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "o+t"
+  loop: "{{ hardening_ww_dirs.stdout_lines }}"
+
+- name: CIS 7.1.11 / 7.1.12 | Look for world-writable files and unowned files
+  ansible.builtin.command: >-
+    find {{ hardening_local_mounts | join(' ') }} -xdev ( -type f -perm -0002 -o -nouser -o -nogroup )
+  register: hardening_ww_files
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: CIS 7.1.11 / 7.1.12 | Report world-writable or unowned files (manual review)
+  ansible.builtin.set_fact:
+    hardening_warnings: >-
+      {{ hardening_warnings + ['CIS 7.1.11/7.1.12: review world-writable or unowned files: '
+         ~ (hardening_ww_files.stdout_lines[:20] | join(', '))
+         ~ (' ...' if hardening_ww_files.stdout_lines | length > 20 else '')] }}
+  when: hardening_ww_files.stdout_lines | length > 0

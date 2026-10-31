@@ -1,0 +1,26 @@
+---
+# 1.5.1 (ASLR), 1.5.2 (ptrace_scope) and fs.suid_dumpable are set in sysctl.yml.
+
+- name: CIS 1.5.3 | Ensure core dump backtraces are disabled
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/coredump.conf
+    regexp: '^\s*#?\s*ProcessSizeMax\s*='
+    line: ProcessSizeMax=0
+    insertafter: '^\[Coredump\]'
+
+- name: CIS 1.5.4 | Ensure core dump storage is disabled
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/coredump.conf
+    regexp: '^\s*#?\s*Storage\s*='
+    line: Storage=none
+    insertafter: '^\[Coredump\]'
+
+- name: CIS 1.5.3 | Ensure core dumps are restricted for all users
+  ansible.builtin.copy:
+    dest: /etc/security/limits.d/60-cis-coredump.conf
+    content: |
+      # {{ hardening_managed_comment }}
+      * hard core 0
+    owner: root
+    group: root
+    mode: "0644"

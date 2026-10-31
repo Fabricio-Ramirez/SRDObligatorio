@@ -1,0 +1,87 @@
+---
+- name: Preflight | Initialise run summary
+  ansible.builtin.set_fact:
+    hardening_reboot_reasons: []
+    hardening_warnings: []
+
+- name: Preflight | Check that the operating system is supported
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] in hardening_supported_distributions
+      - ansible_facts['distribution_major_version'] in hardening_supported_major_versions
+    fail_msg: >-
+      {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }} is not supported.
+      This role targets {{ hardening_supported_distributions | join('/') }}
+      {{ hardening_supported_major_versions | join('/') }} (CIS Rocky Linux 9 Benchmark).
+    quiet: true
+
+- name: Preflight | Check the SIEM settings
+  ansible.builtin.assert:
+    that:
+      - hardening_siem_type in ['wazuh', 'syslog', 'none']
+      - hardening_siem_type == 'none' or (hardening_siem_host | length > 0)
+    fail_msg: >-
+      SIEM integration is a mandatory control. Set hardening_siem_host to the IP/FQDN of
+      the Wazuh manager (or syslog collector), e.g. "-e hardening_siem_host=10.0.0.10",
+      or explicitly disable it with "-e hardening_siem_type=none".
+    quiet: true
+  when: hardening_siem_enabled | bool
+
+- name: Preflight | Read local users
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Preflight | Read local groups
+  ansible.builtin.getent:
+    database: group
+
+# PermitRootLogin is always disabled, so at least one non-root member of the
+# allowed groups (wheel by default, which also grants sudo) must exist.
+- name: Preflight | Find the administrators that will be able to log in over SSH
+  ansible.builtin.set_fact:
+    hardening_ssh_admin_users: "{{ (_secondary_members + _primary_members) | unique | difference(['root']) }}"
+  vars:
+    _groups: "{{ hardening_ssh_allow_groups if (hardening_ssh_allow_groups | length > 0) else ['wheel'] }}"
+    _existing_groups: "{{ _groups | select('in', ansible_facts['getent_group']) | list }}"
+    _group_entries: "{{ _existing_groups | map('extract', ansible_facts['getent_group']) | list }}"
+    _gids: "{{ _group_entries | map(attribute='1') | list }}"
+    _secondary_members: "{{ _group_entries | map(attribute='2') | map('split', ',') | flatten | select | list }}"
+    _primary_members: >-
+      {{ ansible_facts['getent_passwd'] | dict2items | selectattr('value.2', 'in', _gids) | map(attribute='key') | list }}
+
+- name: Preflight | Abort if nobody could administer the server after hardening
+  ansible.builtin.assert:
+    that: hardening_ssh_admin_users | length > 0
+    fail_msg: >-
+      Lock-out protection: root login over SSH will be disabled, but no non-root user belongs to
+      {{ hardening_ssh_allow_groups if hardening_ssh_allow_groups else ['wheel'] }}.
+      Create an administrator first, e.g.: useradd -m -G wheel admin && passwd admin
+    quiet: true
+  when:
+    - hardening_ssh_enabled | bool
+    - hardening_preflight_ssh_lockout_check | bool
+
+- name: Preflight | Look for SSH public keys of the administrators
+  ansible.builtin.stat:
+    path: "{{ ansible_facts['getent_passwd'][item][4] }}/.ssh/authorized_keys"
+  loop: "{{ hardening_ssh_admin_users | select('in', ansible_facts['getent_passwd']) | list }}"
+  register: hardening_admin_keys
+  when:
+    - hardening_ssh_enabled | bool
+    - hardening_preflight_ssh_lockout_check | bool
+    - not (hardening_ssh_password_authentication | bool)
+
+- name: Preflight | Abort if password logins would be disabled without any SSH key installed
+  ansible.builtin.assert:
+    that: >-
+      hardening_admin_keys.results | selectattr('stat', 'defined') | selectattr('stat.exists')
+      | selectattr('stat.size', 'gt', 0) | list | length > 0
+    fail_msg: >-
+      Lock-out protection: SSH password authentication will be disabled, but none of
+      {{ hardening_ssh_admin_users }} has ~/.ssh/authorized_keys. Install a key first
+      (ssh-copy-id admin@server) or run with -e hardening_ssh_password_authentication=true
+    quiet: true
+  when:
+    - hardening_ssh_enabled | bool
+    - hardening_preflight_ssh_lockout_check | bool
+    - not (hardening_ssh_password_authentication | bool)

@@ -1,0 +1,81 @@
+---
+- name: SIEM Wazuh | Import the Wazuh GPG key
+  ansible.builtin.rpm_key:
+    key: "{{ hardening_wazuh_gpg_key }}"
+    state: present
+
+# The repository stays disabled so that "dnf update" / dnf-automatic never
+# upgrade the agent beyond the manager version; it is enabled only here.
+- name: SIEM Wazuh | Configure the Wazuh repository (disabled by default)
+  ansible.builtin.yum_repository:
+    name: wazuh
+    description: EL-$releasever - Wazuh
+    baseurl: "{{ hardening_wazuh_repo_baseurl }}"
+    gpgkey: "{{ hardening_wazuh_gpg_key }}"
+    gpgcheck: true
+    enabled: false
+
+# WAZUH_* variables are read by the package scripts on first install.
+- name: SIEM Wazuh | Install the Wazuh agent
+  ansible.builtin.dnf:
+    name: "wazuh-agent{{ ('-' ~ hardening_wazuh_agent_version) if hardening_wazuh_agent_version | length > 0 else '' }}"
+    state: present
+    enablerepo: wazuh
+  environment: "{{ _wazuh_env | dict2items | rejectattr('value', 'equalto', '') | items2dict }}"
+  vars:
+    _wazuh_env:
+      WAZUH_MANAGER: "{{ hardening_siem_host }}"
+      WAZUH_AGENT_NAME: "{{ hardening_wazuh_agent_name }}"
+      WAZUH_AGENT_GROUP: "{{ hardening_wazuh_agent_group }}"
+      WAZUH_REGISTRATION_PASSWORD: "{{ hardening_wazuh_registration_password }}"
+  no_log: "{{ hardening_wazuh_registration_password | length > 0 }}"
+
+- name: SIEM Wazuh | Ensure the agent points to the Wazuh manager
+  ansible.builtin.replace:
+    path: /var/ossec/etc/ossec.conf
+    regexp: '<address>[^<]*</address>'
+    replace: "<address>{{ hardening_siem_host }}</address>"
+  notify: Restart wazuh-agent
+
+- name: SIEM Wazuh | Ensure the enrollment password file
+  ansible.builtin.copy:
+    dest: /var/ossec/etc/authd.pass
+    content: "{{ hardening_wazuh_registration_password }}\n"
+    owner: root
+    group: wazuh
+    mode: "0640"
+  no_log: true
+  when: hardening_wazuh_registration_password | length > 0
+  notify: Restart wazuh-agent
+
+- name: SIEM Wazuh | Read the agent configuration
+  ansible.builtin.slurp:
+    src: /var/ossec/etc/ossec.conf
+  register: hardening_ossec_conf
+
+# auditd and sudo logs are added only if the default configuration does not
+# already collect them (Wazuh accepts several <ossec_config> blocks).
+- name: SIEM Wazuh | Ensure auditd and sudo logs are collected
+  ansible.builtin.blockinfile:
+    path: /var/ossec/etc/ossec.conf
+    marker: "<!-- {mark} ANSIBLE MANAGED BLOCK: {{ item.location }} -->"
+    insertafter: EOF
+    block: |
+      <ossec_config>
+        <localfile>
+          <log_format>{{ item.format }}</log_format>
+          <location>{{ item.location }}</location>
+        </localfile>
+      </ossec_config>
+  loop: "{{ hardening_wazuh_extra_localfiles }}"
+  loop_control:
+    label: "{{ item.location }}"
+  when: ('<location>' ~ item.location ~ '</location>') not in (hardening_ossec_conf.content | b64decode)
+  notify: Restart wazuh-agent
+
+- name: SIEM Wazuh | Ensure the Wazuh agent is enabled and running
+  ansible.builtin.systemd:
+    name: wazuh-agent
+    enabled: true
+    state: started
+    daemon_reload: true

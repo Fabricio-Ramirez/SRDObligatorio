@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: hardening
+  namespace: cdg
+  author: Equipo Obligatorio SRD
+  description: Rocky Linux 9 hardening based on CIS Benchmark v2.0.0 Level 1 Server
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: EL
+      versions: ["9"]
+  galaxy_tags: [cis, hardening, rocky, security]
+dependencies: []

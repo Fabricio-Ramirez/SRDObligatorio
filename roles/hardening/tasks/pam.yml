@@ -1,0 +1,115 @@
+---
+- name: CIS 5.3.1.1-5.3.1.3 | Ensure pam, authselect and libpwquality are installed
+  ansible.builtin.dnf:
+    name: [pam, authselect, libpwquality]
+    state: present
+
+- name: CIS 5.3.1.1-5.3.1.3 | Ensure the latest versions of pam, authselect and libpwquality
+  ansible.builtin.dnf:
+    name: [pam, authselect, libpwquality]
+    state: latest
+    update_only: true
+
+# --- 5.3.2 authselect ---------------------------------------------------------
+- name: CIS 5.3.2.1 | Read the active authselect profile
+  ansible.builtin.command: authselect current --raw
+  register: hardening_authselect_current
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: CIS 5.3.2.1 | Select an authselect profile when none is active
+  ansible.builtin.command: "authselect select {{ hardening_authselect_profile }} --force"
+  changed_when: true
+  when: hardening_authselect_current.rc != 0 or hardening_authselect_current.stdout | trim | length == 0
+
+- name: CIS 5.3.2.1 | Record the active profile and its enabled features
+  ansible.builtin.set_fact:
+    hardening_authselect_active_profile: "{{ _raw[0] if _raw | length > 0 else hardening_authselect_profile }}"
+    hardening_authselect_active_features: "{{ _raw[1:] }}"
+  vars:
+    _raw: "{{ hardening_authselect_current.stdout.split() if hardening_authselect_current.rc == 0 else [] }}"
+
+- name: CIS 5.3.2.1 | List the features the profile supports
+  ansible.builtin.command: "authselect list-features {{ hardening_authselect_active_profile }}"
+  register: hardening_authselect_supported
+  changed_when: false
+  check_mode: false
+
+- name: CIS 5.3.2.2 / 5.3.2.4 / 5.3.3.4.1 | Enable pam_faillock, pam_pwhistory and remove nullok
+  ansible.builtin.command: "authselect enable-feature {{ item }}"
+  loop: >-
+    {{ hardening_authselect_features
+       | intersect(hardening_authselect_supported.stdout_lines)
+       | difference(hardening_authselect_active_features) }}
+  changed_when: true
+
+- name: CIS 5.3.2 | Report authselect features not supported by the profile
+  ansible.builtin.set_fact:
+    hardening_warnings: >-
+      {{ hardening_warnings + ['CIS 5.3.2: authselect profile ' ~ hardening_authselect_active_profile
+         ~ ' does not support: ' ~ (_missing | join(', '))] }}
+  vars:
+    _missing: "{{ hardening_authselect_features | difference(hardening_authselect_supported.stdout_lines) }}"
+  when: _missing | length > 0
+
+# --- 5.3.3.1 pam_faillock -----------------------------------------------------
+- name: CIS 5.3.3.1.1-5.3.3.1.2 | Ensure lockout after failed attempts and unlock time
+  ansible.builtin.lineinfile:
+    path: /etc/security/faillock.conf
+    regexp: "^\\s*#?\\s*{{ item.key }}\\s*="
+    line: "{{ item.key }} = {{ item.value }}"
+  loop:
+    - { key: deny, value: "{{ hardening_faillock_deny }}" }
+    - { key: unlock_time, value: "{{ hardening_faillock_unlock_time }}" }
+  loop_control:
+    label: "{{ item.key }}"
+
+# --- 5.3.3.2 pam_pwquality ----------------------------------------------------
+- name: CIS 5.3.3.2.1-5.3.3.2.7 | Ensure password quality requirements
+  ansible.builtin.copy:
+    dest: /etc/security/pwquality.conf.d/50-cis-hardening.conf
+    content: |
+      # {{ hardening_managed_comment }}
+      # CIS 5.3.3.2.x - password quality
+      {% for key, value in hardening_pwquality.items() %}
+      {{ key }} = {{ value }}
+      {% endfor %}
+      enforce_for_root
+    owner: root
+    group: root
+    mode: "0644"
+
+# --- 5.3.3.3 pam_pwhistory ----------------------------------------------------
+- name: CIS 5.3.3.3.1 | Ensure password history remember is configured
+  ansible.builtin.lineinfile:
+    path: /etc/security/pwhistory.conf
+    regexp: '^\s*#?\s*remember\s*='
+    line: "remember = {{ hardening_pwhistory_remember }}"
+
+- name: CIS 5.3.3.3.2 | Ensure password history is enforced for the root user
+  ansible.builtin.lineinfile:
+    path: /etc/security/pwhistory.conf
+    regexp: '^\s*#?\s*enforce_for_root\s*$'
+    line: enforce_for_root
+
+# --- 5.4.1 Shadow password suite -----------------------------------------------
+- name: CIS 5.4.1.1-5.4.1.4 / 5.4.3.3 | Ensure password aging, hashing and umask defaults
+  ansible.builtin.lineinfile:
+    path: /etc/login.defs
+    regexp: "^\\s*{{ item.key }}\\s"
+    line: "{{ item.key }}\t{{ item.value }}"
+  loop:
+    - { key: PASS_MAX_DAYS, value: "{{ hardening_pass_max_days }}" }
+    - { key: PASS_MIN_DAYS, value: "{{ hardening_pass_min_days }}" }
+    - { key: PASS_WARN_AGE, value: "{{ hardening_pass_warn_age }}" }
+    - { key: ENCRYPT_METHOD, value: "{{ hardening_encrypt_method }}" }
+    - { key: UMASK, value: "{{ hardening_umask }}" }
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: CIS 5.4.1.5 | Ensure inactive password lock is configured for new users
+  ansible.builtin.lineinfile:
+    path: /etc/default/useradd
+    regexp: '^\s*#?\s*INACTIVE='
+    line: "INACTIVE={{ hardening_inactive_days }}"

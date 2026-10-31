@@ -1,0 +1,13 @@
+---
+# Rocky Linux 9 server hardening - CIS Benchmark v2.0.0 Level 1 Server.
+#
+# Local run on the server itself (see bootstrap.sh):
+#   ansible-playbook site.yml -e hardening_siem_host=<SIEM_IP>
+# Remote run from a control node:
+#   ansible-playbook -i inventory/hosts.ini site.yml
+- name: Harden Rocky Linux servers
+  hosts: rocky_servers
+  become: true
+  gather_facts: true
+  roles:
+    - role: hardening

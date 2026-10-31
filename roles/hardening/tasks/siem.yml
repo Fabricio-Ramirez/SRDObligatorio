@@ -1,0 +1,14 @@
+---
+# Assignment requirement 1.4 "Integracion con el SIEM".
+#   wazuh  -> Wazuh agent: log collection (syslog, auditd, sudo), FIM, SCA,
+#             inventory and active response, encrypted channel to the manager.
+#   syslog -> rsyslog forwards every message (and auditd events) to a collector
+#             (CIS 6.2.3.6 "Ensure rsyslog is configured to send logs to a remote log host").
+
+- name: SIEM | Wazuh agent
+  ansible.builtin.include_tasks: siem_wazuh.yml
+  when: hardening_siem_type == 'wazuh'
+
+- name: SIEM | Syslog forwarding
+  ansible.builtin.include_tasks: siem_syslog.yml
+  when: hardening_siem_type == 'syslog'

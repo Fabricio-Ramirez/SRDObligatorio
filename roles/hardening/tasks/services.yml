@@ -1,0 +1,120 @@
+---
+# --- 2.1.21 Mail transfer agent ---------------------------------------------
+- name: CIS 2.1.21 | Check whether postfix is installed
+  ansible.builtin.stat:
+    path: /etc/postfix/main.cf
+  register: hardening_postfix_conf
+
+- name: CIS 2.1.21 | Ensure the mail transfer agent is configured for local-only mode
+  ansible.builtin.lineinfile:
+    path: /etc/postfix/main.cf
+    regexp: '^\s*inet_interfaces\s*='
+    line: inet_interfaces = loopback-only
+  when:
+    - hardening_postfix_loopback_only | bool
+    - hardening_postfix_conf.stat.exists
+  notify: Restart postfix
+
+# --- 2.3 Time synchronization -----------------------------------------------
+- name: CIS 2.3.1 | Ensure chrony is installed
+  ansible.builtin.dnf:
+    name: chrony
+    state: present
+
+- name: CIS 2.3.2 | Ensure chrony uses the organisation time servers
+  ansible.builtin.blockinfile:
+    path: /etc/chrony.conf
+    marker: "# {mark} ANSIBLE MANAGED - CIS 2.3.2 time sources"
+    insertbefore: BOF
+    block: |
+      {% for server in hardening_ntp_servers %}
+      server {{ server }} iburst
+      {% endfor %}
+  when: hardening_ntp_servers | length > 0
+  notify: Restart chronyd
+
+- name: CIS 2.3.3 | Ensure chrony is not run as the root user
+  ansible.builtin.replace:
+    path: /etc/sysconfig/chronyd
+    regexp: '\s*-u\s+(?!chrony\b)[^\s"]+'
+    replace: ''
+  notify: Restart chronyd
+
+- name: CIS 2.3.1 | Ensure chronyd is enabled and running
+  ansible.builtin.systemd:
+    name: chronyd
+    enabled: true
+    state: started
+
+# --- 2.4 Job schedulers ------------------------------------------------------
+- name: CIS 2.4.1.1 | Ensure cron is installed
+  ansible.builtin.dnf:
+    name: cronie
+    state: present
+
+- name: CIS 2.4.1.1 | Ensure cron daemon is enabled and active
+  ansible.builtin.systemd:
+    name: crond
+    enabled: true
+    state: started
+
+- name: CIS 2.4.1.2 | Ensure permissions on /etc/crontab are configured
+  ansible.builtin.file:
+    path: /etc/crontab
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: CIS 2.4.1.3-2.4.1.7 | Ensure permissions on cron directories are configured
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /etc/cron.hourly
+    - /etc/cron.daily
+    - /etc/cron.weekly
+    - /etc/cron.monthly
+    - /etc/cron.d
+
+- name: CIS 2.4.1.8 | Ensure crontab is restricted to authorized users
+  ansible.builtin.copy:
+    dest: /etc/cron.allow
+    content: |
+      {% for user in hardening_cron_allow_users %}
+      {{ user }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: CIS 2.4.1.8 / 2.4.2.1 | Check cron.deny / at.deny / at
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: [/etc/cron.deny, /etc/at.deny, /usr/bin/at]
+  register: hardening_scheduler_files
+
+- name: CIS 2.4.1.8 / 2.4.2.1 | Ensure permissions on existing deny files
+  ansible.builtin.file:
+    path: "{{ item.item }}"
+    owner: root
+    group: root
+    mode: "0640"
+  loop: "{{ hardening_scheduler_files.results[:2] }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists
+
+- name: CIS 2.4.2.1 | Ensure at is restricted to authorized users
+  ansible.builtin.copy:
+    dest: /etc/at.allow
+    content: |
+      {% for user in hardening_cron_allow_users %}
+      {{ user }}
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0640"
+  when: hardening_scheduler_files.results[2].stat.exists

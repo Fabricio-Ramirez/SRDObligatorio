@@ -1,0 +1,20 @@
+---
+# Site-wide settings for every hardened server. Every variable and its CIS
+# reference is documented in roles/hardening/defaults/main.yml.
+# Per-server differences go in host_vars/<inventory_hostname>.yml
+# (see host_vars/README.md).
+
+# SIEM integration (mandatory): Wazuh manager address. Can also be passed on
+# the command line: bootstrap.sh --siem-host 10.0.10.12
+hardening_siem_type: wazuh
+hardening_siem_host: ""
+
+# Secure administrative access: accept SSH only from the bastion / admin
+# network. Leave empty until the bastion exists.
+hardening_ssh_allowed_networks: []
+
+# Only members of these groups may log in over SSH (CIS 5.1.7).
+hardening_ssh_allow_groups: [wheel]
+
+# Organisation NTP servers (CIS 2.3.2). Empty = keep the distribution pool.
+hardening_ntp_servers: []

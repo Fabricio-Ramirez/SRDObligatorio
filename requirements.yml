@@ -1,0 +1,7 @@
+---
+# ansible.posix 1.5.4 is the newest release that still supports ansible-core
+# 2.14, the version shipped in the Rocky Linux 9 AppStream repository
+# (1.6.x and 2.x require ansible-core >= 2.15).
+collections:
+  - name: ansible.posix
+    version: "1.5.4"

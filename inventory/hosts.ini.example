@@ -1,0 +1,13 @@
+# Example inventory for running the playbook from a control node over SSH.
+# Copy to inventory/hosts.ini and adapt. The user must be able to sudo.
+#
+#   ansible-playbook -i inventory/hosts.ini site.yml --ask-become-pass
+
+[rocky_servers]
+srv-idp      ansible_host=10.0.10.11
+srv-siem     ansible_host=10.0.10.12
+srv-bastion  ansible_host=10.0.10.10
+
+[rocky_servers:vars]
+ansible_user=admin
+ansible_python_interpreter=/usr/bin/python3
