@@ -1,0 +1,12 @@
+# {{ hardening_managed_comment }}
+# CIS 6.2.3.6 - send every log message to the SIEM collector.
+# A disk-assisted queue keeps messages while the collector is unreachable.
+*.* action(type="omfwd"
+           target="{{ hardening_siem_host }}"
+           port="{{ hardening_siem_syslog_port }}"
+           protocol="{{ hardening_siem_syslog_protocol }}"
+           action.resumeRetryCount="-1"
+           queue.type="LinkedList"
+           queue.filename="siem_fwd"
+           queue.maxDiskSpace="1g"
+           queue.saveOnShutdown="on")

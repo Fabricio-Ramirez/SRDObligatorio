@@ -1,0 +1,15 @@
+---
+# Rocky Linux 10 server hardening - CIS RHEL 10 Benchmark v1.0.1 Level 1 Server.
+# Same variables (group_vars/, host_vars/) as site.yml (Rocky Linux 9);
+# bootstrap.sh selects this playbook automatically on Rocky Linux 10.
+#
+# Local run on the server itself:
+#   ansible-playbook site-rocky10.yml -e hardening_siem_host=<SIEM_IP>
+# Remote run from a control node:
+#   ansible-playbook -i inventory/hosts.ini site-rocky10.yml
+- name: Harden Rocky Linux 10 servers
+  hosts: rocky_servers
+  become: true
+  gather_facts: true
+  roles:
+    - role: hardening_rocky10

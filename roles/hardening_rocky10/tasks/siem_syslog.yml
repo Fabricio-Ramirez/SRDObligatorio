@@ -1,0 +1,57 @@
+---
+- name: SIEM syslog | Ensure rsyslog and the audit syslog plugin are installed
+  ansible.builtin.dnf:
+    name:
+      - rsyslog
+      - audispd-plugins
+    state: present
+
+- name: SIEM syslog | Forward all logs to the SIEM collector
+  ansible.builtin.template:
+    src: rsyslog-siem.conf.j2
+    dest: /etc/rsyslog.d/90-siem-forward.conf
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart rsyslog
+
+# Check the complete rsyslog configuration before the handler restarts it.
+- name: SIEM syslog | Validate the rsyslog configuration
+  ansible.builtin.command: rsyslogd -N1
+  changed_when: false
+  check_mode: false
+
+- name: SIEM syslog | Check for the audit syslog plugin
+  ansible.builtin.stat:
+    path: /etc/audit/plugins.d/syslog.conf
+  register: hardening_audisp_syslog
+
+# auditd events go to /var/log/audit only; the plugin copies them to syslog
+# so that rsyslog forwards them as well.
+- name: SIEM syslog | Send audit events to syslog
+  ansible.builtin.lineinfile:
+    path: /etc/audit/plugins.d/syslog.conf
+    regexp: '^\s*active\s*='
+    line: active = yes
+  when: hardening_audisp_syslog.stat.exists
+  notify: Reload auditd
+
+# SELinux lets rsyslog (syslogd_t) open TCP connections only to ports labelled
+# rsh_port_t (514), syslogd_port_t (601, 20514) or syslog_tls_port_t (6514).
+# UDP may use any port.
+- name: SIEM syslog | Ensure semanage is installed
+  ansible.builtin.dnf:
+    name: policycoreutils-python-utils
+    state: present
+  when: _custom_tcp_port | bool
+  vars:
+    _custom_tcp_port: "{{ hardening_siem_syslog_protocol == 'tcp' and hardening_siem_syslog_port | int not in [514, 601, 6514, 20514] }}"
+
+- name: SIEM syslog | Allow rsyslog to connect to the custom TCP port (SELinux)
+  ansible.builtin.command: "semanage port -a -t syslogd_port_t -p tcp {{ hardening_siem_syslog_port }}"
+  register: hardening_semanage_syslog
+  changed_when: hardening_semanage_syslog.rc == 0
+  failed_when: hardening_semanage_syslog.rc != 0 and 'already defined' not in hardening_semanage_syslog.stderr
+  when: _custom_tcp_port | bool
+  vars:
+    _custom_tcp_port: "{{ hardening_siem_syslog_protocol == 'tcp' and hardening_siem_syslog_port | int not in [514, 601, 6514, 20514] }}"

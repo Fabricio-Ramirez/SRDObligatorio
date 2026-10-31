@@ -1,0 +1,90 @@
+---
+# Logging design (CIS 6.2.1.4 - one logging system): rsyslog writes the local
+# log files and forwards them; journald keeps a persistent, compressed copy.
+
+# --- 6.2.1 / 6.2.3.3 journald -------------------------------------------------
+- name: CIS 6.2.1.1 | Ensure journald service is active
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: started
+
+- name: CIS 6.2.1.3 / 6.2.3.3 | Ensure the journald drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: CIS 6.2.1.3 / 6.2.2.3 / 6.2.2.4 / 6.2.3.3 | Configure journald
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/60-cis-hardening.conf
+    content: |
+      # {{ hardening_managed_comment }}
+      [Journal]
+      # CIS 6.2.2.4 / 6.2.2.3 - keep a persistent, compressed journal
+      Storage=persistent
+      Compress=yes
+      # CIS 6.2.1.3 - bound the space used by the journal
+      SystemMaxUse={{ hardening_journald_system_max_use }}
+      # CIS 6.2.3.3 - rsyslog is the logging system in use
+      ForwardToSyslog=yes
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart systemd-journald
+
+# --- 6.2.3 rsyslog ------------------------------------------------------------
+- name: CIS 6.2.3.1 | Ensure rsyslog is installed
+  ansible.builtin.dnf:
+    name: rsyslog
+    state: present
+
+- name: CIS 6.2.3.4 | Ensure rsyslog log file creation mode is configured
+  ansible.builtin.copy:
+    dest: /etc/rsyslog.d/00-cis-filemode.conf
+    content: |
+      # {{ hardening_managed_comment }}
+      # CIS 6.2.3.4
+      $FileCreateMode {{ hardening_rsyslog_file_create_mode }}
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart rsyslog
+
+- name: CIS 6.2.3.7 | Look for rsyslog network listeners
+  ansible.builtin.command: >-
+    grep -rEs '^\s*(module\(load="?im(tcp|udp)|input\(type="?im(tcp|udp)|\$ModLoad\s+im(tcp|udp)|\$(InputTCPServerRun|UDPServerRun))'
+    /etc/rsyslog.conf /etc/rsyslog.d/
+  register: hardening_rsyslog_listeners
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: CIS 6.2.3.7 | Report rsyslog accepting logs from remote clients
+  ansible.builtin.set_fact:
+    hardening_warnings: >-
+      {{ hardening_warnings + ['CIS 6.2.3.7: rsyslog listens for remote logs: '
+         ~ (hardening_rsyslog_listeners.stdout_lines | join(' | '))] }}
+  when: hardening_rsyslog_listeners.stdout | length > 0
+
+- name: CIS 6.2.3.2 | Ensure rsyslog service is enabled and active
+  ansible.builtin.systemd:
+    name: rsyslog
+    enabled: true
+    state: started
+
+# --- 6.2.4 Log file permissions ------------------------------------------------
+- name: CIS 6.2.4.1 | Find log files accessible by "other"
+  ansible.builtin.command: find /var/log -xdev -type f -perm /o+rwx
+  register: hardening_world_logfiles
+  changed_when: false
+  check_mode: false
+  when: hardening_logfiles_remove_other_permissions | bool
+
+- name: CIS 6.2.4.1 | Remove "other" permissions from log files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: o-rwx
+  loop: "{{ hardening_world_logfiles.stdout_lines | default([]) }}"
+  when: hardening_logfiles_remove_other_permissions | bool

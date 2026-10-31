@@ -1,0 +1,108 @@
+---
+# Order matters: packages first, AIDE last so its baseline database is taken
+# from the already hardened system.
+
+- name: Preflight checks
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [always]
+
+- name: CIS 1.2 / 2.1 / 2.2 - Package management
+  ansible.builtin.import_tasks: packages.yml
+  when: hardening_packages_enabled | bool
+  tags: [packages]
+
+- name: CIS 1.1 / 3.2 - Filesystem and kernel modules
+  ansible.builtin.import_tasks: filesystem.yml
+  when: hardening_filesystem_enabled | bool
+  tags: [filesystem]
+
+- name: CIS 1.4 / 1.3.1.2 / 6.3.1.2-3 - Bootloader and kernel command line
+  ansible.builtin.import_tasks: bootloader.yml
+  when: hardening_bootloader_enabled | bool
+  tags: [bootloader]
+
+- name: CIS 1.3 - SELinux
+  ansible.builtin.import_tasks: selinux.yml
+  when: hardening_selinux_enabled | bool
+  tags: [selinux]
+
+- name: CIS 1.5 - Process hardening
+  ansible.builtin.import_tasks: process.yml
+  when: hardening_process_enabled | bool
+  tags: [process]
+
+- name: CIS 1.6 - System-wide crypto policy
+  ansible.builtin.import_tasks: crypto_policy.yml
+  when: hardening_crypto_policy_enabled | bool
+  tags: [crypto]
+
+- name: CIS 1.7 - Warning banners
+  ansible.builtin.import_tasks: banners.yml
+  when: hardening_banners_enabled | bool
+  tags: [banners]
+
+- name: CIS 2.1.21 / 2.3 / 2.4 - Services
+  ansible.builtin.import_tasks: services.yml
+  when: hardening_services_enabled | bool
+  tags: [services]
+
+- name: CIS 1.5 / 3.1.2 / 3.3 - Kernel parameters and wireless
+  ansible.builtin.import_tasks: sysctl.yml
+  when: hardening_sysctl_enabled | bool
+  tags: [sysctl]
+
+- name: CIS 4 - Host based firewall
+  ansible.builtin.import_tasks: firewall.yml
+  when: hardening_firewall_enabled | bool
+  tags: [firewall]
+
+- name: CIS 5.1 - SSH server
+  ansible.builtin.import_tasks: ssh.yml
+  when: hardening_ssh_enabled | bool
+  tags: [ssh]
+
+- name: CIS 5.2 - Privilege escalation
+  ansible.builtin.import_tasks: sudo.yml
+  when: hardening_sudo_enabled | bool
+  tags: [sudo]
+
+- name: CIS 5.3 - PAM
+  ansible.builtin.import_tasks: pam.yml
+  when: hardening_pam_enabled | bool
+  tags: [pam]
+
+- name: CIS 5.4 - User accounts and environment
+  ansible.builtin.import_tasks: accounts.yml
+  when: hardening_accounts_enabled | bool
+  tags: [accounts]
+
+- name: CIS 6.2 - Logging
+  ansible.builtin.import_tasks: logging.yml
+  when: hardening_logging_enabled | bool
+  tags: [logging]
+
+- name: CIS 6.3 - System auditing (auditd)
+  ansible.builtin.import_tasks: auditd.yml
+  when: hardening_auditd_enabled | bool
+  tags: [auditd]
+
+- name: SIEM integration
+  ansible.builtin.import_tasks: siem.yml
+  when:
+    - hardening_siem_enabled | bool
+    - hardening_siem_type != 'none'
+  tags: [siem]
+
+- name: CIS 7.1 - System file permissions
+  ansible.builtin.import_tasks: file_permissions.yml
+  when: hardening_file_permissions_enabled | bool
+  tags: [permissions]
+
+- name: CIS 6.1 - Filesystem integrity (AIDE)
+  ansible.builtin.import_tasks: aide.yml
+  when: hardening_aide_enabled | bool
+  tags: [aide]
+
+- name: Run summary
+  ansible.builtin.import_tasks: summary.yml
+  tags: [always]

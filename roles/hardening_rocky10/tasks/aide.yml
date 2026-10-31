@@ -1,0 +1,56 @@
+---
+- name: CIS 6.1.1 | Ensure AIDE is installed
+  ansible.builtin.dnf:
+    name: aide
+    state: present
+
+- name: CIS 6.1.3 | Ensure cryptographic mechanisms protect the integrity of audit tools
+  ansible.builtin.blockinfile:
+    path: /etc/aide.conf
+    marker: "# {mark} ANSIBLE MANAGED - CIS 6.1.3 audit tools"
+    block: |
+      {% for tool in hardening_aide_audit_tools %}
+      {{ tool }} p+i+n+u+g+s+b+acl+xattrs+sha512
+      {% endfor %}
+  register: hardening_aide_conf
+
+- name: CIS 6.1.1 | Validate the AIDE configuration
+  ansible.builtin.command: aide --config-check
+  changed_when: false
+  check_mode: false
+
+- name: CIS 6.1.1 | Check for an AIDE database
+  ansible.builtin.stat:
+    path: /var/lib/aide/aide.db.gz
+  register: hardening_aide_db
+
+# Built at the end of the play, so the baseline already includes every
+# hardening change. It can take several minutes.
+- name: CIS 6.1.1 | Initialise the AIDE database
+  ansible.builtin.command: aide --init
+  changed_when: true
+  when: not hardening_aide_db.stat.exists or hardening_aide_conf is changed
+
+- name: CIS 6.1.1 | Activate the new AIDE database
+  ansible.builtin.copy:
+    src: /var/lib/aide/aide.db.new.gz
+    dest: /var/lib/aide/aide.db.gz
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0600"
+  # In --check mode "aide --init" does not run, so there is nothing to copy.
+  when:
+    - not ansible_check_mode
+    - not hardening_aide_db.stat.exists or hardening_aide_conf is changed
+
+- name: CIS 6.1.2 | Ensure filesystem integrity is regularly checked
+  ansible.builtin.copy:
+    dest: /etc/cron.d/aide-check
+    content: |
+      # {{ hardening_managed_comment }}
+      # CIS 6.1.2 - daily AIDE integrity check (results go to syslog and the SIEM)
+      {{ hardening_aide_cron_schedule }} root /usr/sbin/aide --check | /usr/bin/logger -t aide -p authpriv.notice
+    owner: root
+    group: root
+    mode: "0600"

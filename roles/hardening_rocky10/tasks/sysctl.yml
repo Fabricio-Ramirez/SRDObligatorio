@@ -1,0 +1,38 @@
+---
+- name: CIS 3.1.1 | Check whether IPv6 is enabled in the kernel
+  ansible.builtin.stat:
+    path: /proc/sys/net/ipv6
+  register: hardening_ipv6_proc
+
+# Servers normally have no Wi-Fi; only acts when a wireless interface exists.
+- name: CIS 3.1.2 | Read the wireless radio state
+  ansible.builtin.command: nmcli radio wifi
+  register: hardening_wifi_radio
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: ansible_facts['interfaces'] | default([]) | select('match', '^wl') | list | length > 0
+
+- name: CIS 3.1.2 | Ensure wireless interfaces are not available
+  ansible.builtin.command: nmcli radio all off
+  changed_when: true
+  when:
+    - hardening_wifi_radio is not skipped
+    - hardening_wifi_radio.rc == 0
+    - hardening_wifi_radio.stdout | trim == 'enabled'
+
+# Values are written to one file under /etc/sysctl.d and applied immediately.
+- name: CIS 1.5.2-1.5.8 / 3.3.1.x / 3.3.2.x | Ensure kernel parameters are set
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: "{{ hardening_sysctl_file }}"
+    sysctl_set: true
+    reload: false
+    state: present
+  loop: >-
+    {{ (hardening_sysctl | combine(hardening_sysctl_ipv6 if hardening_ipv6_proc.stat.exists else {}))
+       | dict2items }}
+  loop_control:
+    label: "{{ item.key }} = {{ item.value }}"
+  notify: Flush routing cache

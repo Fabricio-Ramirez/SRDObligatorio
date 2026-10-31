@@ -1,0 +1,64 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# Same step as the CIS remediation scripts after changing network parameters.
+- name: Flush routing cache
+  ansible.builtin.command: "sysctl -w {{ item }}.route.flush=1"
+  loop: "{{ ['net.ipv4'] + (['net.ipv6'] if hardening_ipv6_proc.stat.exists | default(false) else []) }}"
+  changed_when: true
+
+- name: Restart firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    state: restarted
+
+- name: Reload firewalld
+  ansible.builtin.command: firewall-cmd --reload
+  changed_when: true
+
+- name: Restart sshd
+  ansible.builtin.systemd:
+    name: sshd
+    state: restarted
+
+- name: Restart rsyslog
+  ansible.builtin.systemd:
+    name: rsyslog
+    state: restarted
+
+- name: Restart systemd-journald
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted
+
+- name: Restart chronyd
+  ansible.builtin.systemd:
+    name: chronyd
+    state: restarted
+
+- name: Restart postfix
+  ansible.builtin.systemd:
+    name: postfix
+    state: restarted
+
+- name: Restart wazuh-agent
+  ansible.builtin.systemd:
+    name: wazuh-agent
+    state: restarted
+
+# auditd refuses "systemctl restart" (RefuseManualStop=yes): SIGHUP makes it
+# re-read auditd.conf.
+- name: Reload auditd
+  ansible.builtin.command: pkill -HUP -x auditd
+  register: hardening_auditd_hup
+  changed_when: true
+  failed_when: hardening_auditd_hup.rc not in [0, 1]
+
+# With "-e 2" loaded the kernel rejects rule changes until the next reboot;
+# that case is reported in the run summary instead of failing here.
+- name: Load audit rules
+  ansible.builtin.command: augenrules --load
+  changed_when: true
+  when: not (hardening_audit_running_immutable | default(false))

@@ -1,0 +1,9 @@
+---
+# Both roles (hardening for Rocky 9, hardening_rocky10 for Rocky 10) share the
+# "hardening_" variable names on purpose, so one group_vars/host_vars set
+# drives either version.
+skip_list:
+  - var-naming[no-role-prefix]
+exclude_paths:
+  - .ansible/
+  - collections/

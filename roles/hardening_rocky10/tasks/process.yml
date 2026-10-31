@@ -1,0 +1,27 @@
+---
+# 1.5.2-1.5.8 (protected links, suid_dumpable, dmesg/kptr restrict, ptrace_scope,
+# ASLR) are set in sysctl.yml.
+
+- name: CIS 1.5.9 | Ensure systemd-coredump ProcessSizeMax is configured
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/coredump.conf
+    regexp: '^\s*#?\s*ProcessSizeMax\s*='
+    line: ProcessSizeMax=0
+    insertafter: '^\[Coredump\]'
+
+- name: CIS 1.5.10 | Ensure systemd-coredump Storage is configured
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/coredump.conf
+    regexp: '^\s*#?\s*Storage\s*='
+    line: Storage=none
+    insertafter: '^\[Coredump\]'
+
+- name: CIS 1.5.1 | Ensure core file size is configured
+  ansible.builtin.copy:
+    dest: /etc/security/limits.d/60-cis-coredump.conf
+    content: |
+      # {{ hardening_managed_comment }}
+      * hard core 0
+    owner: root
+    group: root
+    mode: "0644"

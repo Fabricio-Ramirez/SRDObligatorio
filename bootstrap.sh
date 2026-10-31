@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# bootstrap.sh - Rocky Linux 9 hardening (CIS Benchmark v2.0.0 Level 1 Server)
+# bootstrap.sh - Rocky Linux 9 / 10 hardening (CIS Benchmark Level 1 Server)
 #
 # 1. Installs git and ansible-core from the Rocky Linux repositories.
 # 2. Downloads (or updates) this repository.
 # 3. Installs the required Ansible collection.
-# 4. Runs the hardening playbook against the local server.
+# 4. Runs the hardening playbook for the detected version against the local
+#    server: site.yml (Rocky 9, CIS v2.0.0) or site-rocky10.yml (Rocky 10,
+#    CIS RHEL 10 v1.0.1).
 #
 # Usage (as root, on the freshly installed server):
 #   ./bootstrap.sh --siem-host 10.0.10.12            # inside a clone
@@ -69,8 +71,12 @@ done
 
 # shellcheck disable=SC1091
 . /etc/os-release
-[[ "${ID:-}" == "rocky" && "${VERSION_ID%%.*}" == "9" ]] \
-  || die "This hardening targets Rocky Linux 9 (found: ${PRETTY_NAME:-unknown})."
+[[ "${ID:-}" == "rocky" ]] || die "This hardening targets Rocky Linux 9 or 10 (found: ${PRETTY_NAME:-unknown})."
+case "${VERSION_ID%%.*}" in
+  9)  PLAYBOOK="site.yml" ;;
+  10) PLAYBOOK="site-rocky10.yml" ;;
+  *)  die "This hardening targets Rocky Linux 9 or 10 (found: ${PRETTY_NAME:-unknown})." ;;
+esac
 
 # The playbook stops early if no SIEM address is configured anywhere
 # (--siem-host or group_vars/all.yml).
@@ -123,7 +129,7 @@ chmod 0700 "${LOG_DIR}"
 ANSIBLE_LOG_PATH="${LOG_DIR}/ansible-$(date +%Y%m%d-%H%M%S).log"
 export ANSIBLE_LOG_PATH
 
-playbook_args=(-i inventory/localhost.ini site.yml)
+playbook_args=(-i inventory/localhost.ini "${PLAYBOOK}")
 [[ -n "${SIEM_TYPE}" ]] && playbook_args+=(-e "hardening_siem_type=${SIEM_TYPE}")
 [[ -n "${SIEM_HOST}" ]] && playbook_args+=(-e "hardening_siem_host=${SIEM_HOST}")
 [[ -n "${TAGS}" ]] && playbook_args+=(--tags "${TAGS}")

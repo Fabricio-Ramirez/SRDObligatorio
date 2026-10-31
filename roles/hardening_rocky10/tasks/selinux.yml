@@ -1,0 +1,49 @@
+---
+- name: CIS 1.3.1.1 | Ensure SELinux is installed
+  ansible.builtin.dnf:
+    name:
+      - libselinux
+      - policycoreutils
+      - python3-libselinux
+      - "selinux-policy-{{ hardening_selinux_policy }}"
+    state: present
+
+- name: CIS 1.3.1.1 | Refresh SELinux facts
+  ansible.builtin.setup:
+    filter: ansible_selinux
+
+- name: CIS 1.3.1.3-5 | Ensure SELinux policy is configured and mode is enforcing
+  ansible.posix.selinux:
+    policy: "{{ hardening_selinux_policy }}"
+    state: "{{ hardening_selinux_state }}"
+  register: hardening_selinux_result
+  when: ansible_facts['selinux']['status'] == 'enabled'
+
+# Going straight from "disabled" to "enforcing" can leave the system unbootable
+# because files are not labelled: switch to permissive and relabel on reboot.
+- name: CIS 1.3.1.4 | Switch a disabled SELinux to permissive (first step)
+  ansible.posix.selinux:
+    policy: "{{ hardening_selinux_policy }}"
+    state: permissive
+  register: hardening_selinux_from_disabled
+  when: ansible_facts['selinux']['status'] == 'disabled'
+
+- name: CIS 1.3.1.4 | Request a full filesystem relabel on next boot
+  ansible.builtin.copy:
+    dest: /.autorelabel
+    content: ""
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+  when: hardening_selinux_from_disabled is changed  # noqa: no-handler
+
+- name: CIS 1.3.1.4 | Flag reboot for SELinux changes
+  ansible.builtin.set_fact:
+    hardening_reboot_reasons: "{{ hardening_reboot_reasons + ['SELinux was disabled: relabel on reboot, then run the playbook again to set enforcing'] }}"
+  when: hardening_selinux_from_disabled is changed  # noqa: no-handler
+
+- name: CIS 1.3.1.5 | Flag reboot required by the SELinux module
+  ansible.builtin.set_fact:
+    hardening_reboot_reasons: "{{ hardening_reboot_reasons + ['SELinux mode/policy changed'] }}"
+  when: hardening_selinux_result.reboot_required | default(false)

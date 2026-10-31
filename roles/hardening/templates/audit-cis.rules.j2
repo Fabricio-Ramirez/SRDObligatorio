@@ -7,7 +7,7 @@
 {% macro syscall_rule(names, fields, key) -%}
 {%- set rules = [] -%}
 {%- for arch, table in hardening_audit_arches.items() -%}
-{%-   set known = names | intersect(table) -%}
+{%-   set known = names | select('in', table) | list -%}
 {%-   if known | length > 0 -%}
 {%-     set _ = rules.append('-a always,exit -F arch=' ~ arch ~ ' -S ' ~ (known | join(',')) ~ ((' ' ~ fields) if fields else '') ~ ' -k ' ~ key) -%}
 {%-   endif -%}

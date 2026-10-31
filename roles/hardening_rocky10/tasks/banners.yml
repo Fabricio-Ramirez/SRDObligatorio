@@ -1,0 +1,13 @@
+---
+# The banners must not reveal OS details (\m \r \s \v escapes are not used).
+- name: CIS 1.7.1-1.7.6 | Ensure login warning banners and their permissions are configured
+  ansible.builtin.copy:
+    dest: "{{ item }}"
+    content: "{{ hardening_banner_text }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - /etc/motd      # 1.7.1 / 1.7.4
+    - /etc/issue     # 1.7.2 / 1.7.5
+    - /etc/issue.net # 1.7.3 / 1.7.6

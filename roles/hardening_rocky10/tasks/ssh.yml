@@ -1,0 +1,63 @@
+---
+- name: CIS 5.1 | Ensure the OpenSSH server is installed
+  ansible.builtin.dnf:
+    name: openssh-server
+    state: present
+
+- name: CIS 5.1 | Ensure sshd_config loads the drop-in directory first
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^\s*Include\s+/etc/ssh/sshd_config\.d/\*\.conf'
+    line: Include /etc/ssh/sshd_config.d/*.conf
+    insertbefore: BOF
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart sshd
+
+- name: CIS 5.1.4-5.1.22 | Deploy the hardened sshd configuration
+  ansible.builtin.template:
+    src: sshd-hardening.conf.j2
+    dest: /etc/ssh/sshd_config.d/00-cis-hardening.conf
+    owner: root
+    group: root
+    mode: "0600"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart sshd
+
+- name: CIS 5.1.1 | Ensure permissions on /etc/ssh/sshd_config are configured
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: CIS 5.1.1-5.1.3 | Find sshd drop-ins and host keys
+  ansible.builtin.find:
+    paths: [/etc/ssh/sshd_config.d, /etc/ssh]
+    patterns: ["*.conf", "ssh_host_*_key", "ssh_host_*_key.pub"]
+    file_type: file
+  register: hardening_ssh_files
+
+- name: CIS 5.1.1-5.1.3 | Ensure permissions on sshd drop-ins and host keys
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: root
+    group: root
+    mode: "{{ '0644' if item.path.endswith('.pub') else '0600' }}"
+  loop: "{{ hardening_ssh_files.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  # ssh_config / ssh_config.d (client side) are not affected.
+  when: item.path is match('/etc/ssh/(sshd_config\.d/|ssh_host_)')
+
+# Check the complete configuration (main file + every drop-in) before the
+# handler restarts sshd, so a broken config can never be activated.
+- name: CIS 5.1 | Validate the complete sshd configuration
+  ansible.builtin.command: /usr/sbin/sshd -t
+  changed_when: false
+  check_mode: false
+
+- name: CIS 5.1 | Ensure sshd is enabled and running
+  ansible.builtin.systemd:
+    name: sshd
+    enabled: true
+    state: started

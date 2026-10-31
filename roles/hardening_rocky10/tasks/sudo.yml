@@ -1,0 +1,62 @@
+---
+- name: CIS 5.2.1 | Ensure sudo is installed
+  ansible.builtin.dnf:
+    name: sudo
+    state: present
+
+- name: CIS 5.2.2 / 5.2.3 / 5.2.6 | Ensure sudo uses a pty, logs to a file and re-authenticates
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/00-cis-hardening
+    content: |
+      # {{ hardening_managed_comment }}
+      # CIS 5.2.2 - commands run in a pseudo terminal
+      Defaults use_pty
+      # CIS 5.2.3 - dedicated sudo log file (also watched by auditd and shipped to the SIEM)
+      Defaults logfile="{{ hardening_sudo_logfile }}"
+      # CIS 5.2.6 - re-authenticate after {{ hardening_sudo_timestamp_timeout }} minutes
+      Defaults timestamp_timeout={{ hardening_sudo_timestamp_timeout }}
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: CIS 5.2.4 / 5.2.5 | Look for NOPASSWD or !authenticate in the sudoers files
+  ansible.builtin.command: grep -rEs '^[^#].*(NOPASSWD|!authenticate)' /etc/sudoers /etc/sudoers.d/
+  register: hardening_sudo_nopasswd
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: CIS 5.2.4 / 5.2.5 | Report sudo rules without re-authentication
+  ansible.builtin.set_fact:
+    hardening_warnings: >-
+      {{ hardening_warnings + ['CIS 5.2.4/5.2.5: review sudo rules without password: '
+         ~ (hardening_sudo_nopasswd.stdout_lines | join(' | '))] }}
+  when: hardening_sudo_nopasswd.stdout | length > 0
+
+# CIS 5.2.7 - pam_wheel with an EMPTY group: nobody can use "su" to become
+# root; administrators use sudo, which is logged and audited.
+- name: CIS 5.2.7 | Ensure the empty su group exists
+  ansible.builtin.group:
+    name: "{{ hardening_su_group }}"
+    state: present
+
+- name: CIS 5.2.7 | Read the su group
+  ansible.builtin.command: "getent group {{ hardening_su_group }}"
+  register: hardening_su_group_entry
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Members are the last field of "name:x:gid:members".
+- name: CIS 5.2.7 | Report members of the su group
+  ansible.builtin.set_fact:
+    hardening_warnings: "{{ hardening_warnings + ['CIS 5.2.7: group ' ~ hardening_su_group ~ ' must be empty'] }}"
+  when: hardening_su_group_entry.stdout.split(':') | last | length > 0
+
+- name: CIS 5.2.7 | Ensure access to the su command is restricted
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/su
+    regexp: '^\s*#?\s*auth\s+required\s+pam_wheel\.so'
+    line: "auth\t\trequired\tpam_wheel.so use_uid group={{ hardening_su_group }}"
+    insertafter: '^\s*auth\s+sufficient\s+pam_rootok\.so'

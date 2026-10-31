@@ -1,4 +1,4 @@
-# Plantilla de servidor endurecida — Rocky Linux 9 (CIS Benchmark Nivel 1)
+# Plantilla de servidor endurecida — Rocky Linux 9 y 10 (CIS Benchmark Nivel 1)
 
 Obligatorio de **Seguridad en Redes y Datos** — Analista en Infraestructura Informática, Universidad ORT Uruguay.
 Escenario: **Corporación de Generación S.A. (cdg.uy)**.
@@ -17,6 +17,7 @@ GNU/Linux base de la infraestructura, tomando como referencia **CIS Benchmark Ni
 6. [Estructura del repositorio](#6-estructura-del-repositorio)
 7. [Controles CIS implementados](#7-controles-cis-implementados)
 8. [Decisiones y desviaciones justificadas](#8-decisiones-y-desviaciones-justificadas)
+   - [8.1 Rocky Linux 10](#81-rocky-linux-10)
 9. [Verificación](#9-verificación)
 10. [Resolución de problemas](#10-resolución-de-problemas)
 11. [Pruebas realizadas y limitaciones](#11-pruebas-realizadas-y-limitaciones)
@@ -29,9 +30,10 @@ GNU/Linux base de la infraestructura, tomando como referencia **CIS Benchmark Ni
 
 | Ítem | Valor |
 |---|---|
-| Sistema operativo | Rocky Linux 9.x (x86_64 o aarch64) |
-| Referencia | CIS Rocky Linux 9 Benchmark v2.0.0 — perfil **Level 1 – Server** |
-| Numeración de controles | Igual a CIS Red Hat Enterprise Linux 9 v2.0.0. Los IDs y niveles se verificaron contra el mapeo oficial de ComplianceAsCode (`products/rhel9/controls/cis_rhel9.yml`). Conviene contrastarlos con el PDF oficial de CIS (descarga gratuita con registro). |
+| Sistema operativo | **Rocky Linux 9.x** (versión principal y más probada) o **Rocky Linux 10.x** (x86_64 o aarch64) |
+| Referencia Rocky 9 | CIS Rocky Linux 9 Benchmark v2.0.0 — perfil **Level 1 – Server**: `site.yml` + `roles/hardening` |
+| Referencia Rocky 10 | CIS Red Hat Enterprise Linux 10 Benchmark v1.0.1 — perfil **Level 1 – Server**: `site-rocky10.yml` + `roles/hardening_rocky10` (ver [8.1](#81-rocky-linux-10)) |
+| Numeración de controles | Rocky 9 usa la de CIS RHEL 9 v2.0.0 y Rocky 10 la de CIS RHEL 10 v1.0.1. Los IDs y niveles se verificaron contra el mapeo oficial de ComplianceAsCode (`products/rhel9/controls/cis_rhel9.yml` y `products/rhel10/controls/cis_rhel10.yml`). Conviene contrastarlos con el PDF oficial de CIS (descarga gratuita con registro). |
 | Herramienta | Ansible (`ansible-core` del repositorio AppStream de Rocky 9) + colección `ansible.posix` |
 | Entregable | Scripts y roles (no una imagen), idempotentes: se pueden ejecutar en cada despliegue y volver a ejecutar sin efectos secundarios. |
 
@@ -51,7 +53,7 @@ Cada tarea de Ansible lleva en su nombre el ID del control CIS que implementa (p
 
 La VM la prepara otro integrante del equipo. Antes de ejecutar la plantilla, el servidor debe tener:
 
-1. **Rocky Linux 9.x** instalado (la instalación *Minimal* alcanza).
+1. **Rocky Linux 9.x o 10.x** instalado (la instalación *Minimal* alcanza). `bootstrap.sh` detecta la versión y elige el playbook.
 2. Acceso a Internet: repositorios de Rocky, `github.com`, `galaxy.ansible.com` y `packages.wazuh.com`.
 3. **Un usuario administrador que no sea root, en el grupo `wheel`**, con su clave pública en
    `~/.ssh/authorized_keys`. La plantilla deshabilita el login SSH de root y las contraseñas por SSH;
@@ -110,8 +112,8 @@ Conectarse al servidor con el usuario administrador y ejecutar:
    ```
 
 `bootstrap.sh` instala `ansible-core` desde los repositorios de Rocky, instala la colección `ansible.posix`
-(desde Ansible Galaxy, o desde EPEL si Galaxy no está accesible) y ejecuta `site.yml` sobre el propio
-servidor. El log queda en `/var/log/srd-hardening/` y el resumen en `/var/log/hardening-report.txt`.
+(desde Ansible Galaxy, o desde EPEL si Galaxy no está accesible) y ejecuta sobre el propio servidor el
+playbook de la versión detectada: `site.yml` en Rocky 9 o `site-rocky10.yml` en Rocky 10. El log queda en `/var/log/srd-hardening/` y el resumen en `/var/log/hardening-report.txt`.
 
 ### Opción B — Una sola línea (sin clonar a mano)
 
@@ -146,11 +148,14 @@ Opciones de `bootstrap.sh` (ver `./bootstrap.sh --help`):
    ansible-galaxy collection install -r requirements.yml -p collections
    ```
 
-3. Ejecutar contra todos los servidores:
+3. Ejecutar contra todos los servidores Rocky 9:
 
    ```bash
    ansible-playbook -i inventory/hosts.ini site.yml -e hardening_siem_host=10.0.10.12 --ask-become-pass
    ```
+
+   Para servidores Rocky 10, el mismo comando con `site-rocky10.yml`. Cada rol se detiene en el
+   *preflight* si la versión del servidor no es la suya.
 
 ## 5. Variables principales
 
@@ -179,7 +184,8 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
 ```text
 .
 ├── bootstrap.sh                 # Instala git + Ansible, descarga el repo y ejecuta el playbook
-├── site.yml                     # Playbook principal
+├── site.yml                     # Playbook para Rocky Linux 9
+├── site-rocky10.yml             # Playbook para Rocky Linux 10
 ├── ansible.cfg
 ├── requirements.yml             # Colección ansible.posix (versión compatible con Rocky 9)
 ├── inventory/
@@ -214,6 +220,7 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
         ├── file_permissions.yml # CIS 7.1
         ├── aide.yml             # CIS 6.1 (se ejecuta al final)
         └── summary.yml          # Reporte: reinicio pendiente y puntos a revisar
+    roles/hardening_rocky10/     # Misma estructura, adaptada a CIS RHEL 10 v1.0.1
 ```
 
 ## 7. Controles CIS implementados
@@ -260,6 +267,23 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
 | No automatizados | 5.4.2.5 (PATH de root), 7.1.13 (revisión de SUID/SGID), 7.2.1 y 7.2.3-7.2.9 (consistencia de cuentas y homes). | Son controles de auditoría que requieren revisión manual; quedan como trabajo futuro. |
 | Extras | `dnf-automatic`, `LogDenied` en firewalld, `NO-SSHWEAKMACS`, auditoría de `renameat2`. | Mejoran la gestión de vulnerabilidades y la detección en el SIEM. |
 
+### 8.1 Rocky Linux 10
+
+El rol `roles/hardening_rocky10` se derivó del de Rocky 9 y usa **las mismas variables** (un único `group_vars/`).
+Cada tarea lleva el ID de **CIS RHEL 10 v1.0.1**, que cambia la numeración respecto de RHEL 9
+(por ejemplo, el acceso SSH por grupos pasa de 5.1.7 a 5.1.4). Diferencias de contenido:
+
+| Tema | Rocky 9 (CIS RHEL 9 v2.0.0) | Rocky 10 (CIS RHEL 10 v1.0.1) |
+|---|---|---|
+| Crypto policy | `DEFAULT:NO-SHA1:NO-WEAKMAC:NO-SSHCBC:NO-SSHCHACHA20:NO-SSHETM:NO-SSHWEAKMACS` | `DEFAULT:NO-SHA1:NO-WEAKMAC:NO-SSHCBC:NO-SSHWEAKMACS`. Rocky 10 ya no trae el módulo `NO-SHA1` (se crea), y CIS 10 no incluye los controles de chacha20/EtM (OpenSSH 9.9 aplica *strict KEX* contra CVE-2023-48795). |
+| Módulos del kernel | cramfs, freevxfs, hfs, hfsplus, jffs2, usb-storage | Además `firewire-core` (1.1.1.9) y los de red `atm`, `can`, `dccp`, `tipc`, `rds`, `sctp` (3.2.1-3.2.6, ahora L1). |
+| Parámetros del kernel | ASLR, ptrace, suid_dumpable, red IPv4/IPv6 | Además `fs.protected_hardlinks`, `fs.protected_symlinks` [L2], `kernel.dmesg_restrict`, `kernel.kptr_restrict`, `net.ipv4.conf.{all,default}.forwarding` y `net.ipv6.conf.default.forwarding`. |
+| Firewall | 4.1-4.2 | 4.1.1-4.1.7: además el backend `nftables` (4.1.2). La zona objetivo (4.1.4) es configurable con `hardening_firewall_zone_target` (vacío por defecto: ComplianceAsCode lo marca como *pending*; definir el valor según el PDF de CIS). |
+| cron | `cron.allow` y `cron.deny` 0640 | `cron.allow` y **sin** `cron.deny` (2.4.1.9); incluye `/etc/cron.yearly` si existe. |
+| Wireless | No aplica | 3.1.2: `nmcli radio all off` sólo si existe una interfaz inalámbrica. |
+| PAM | Perfil authselect `sssd` si no hay ninguno; hash SHA512 | Perfil `local` (el de RHEL 10); hash **YESCRYPT** (el de Rocky 10, aceptado por 5.4.1.4). |
+| Auditoría | 6.3.3.1-6.3.3.21 | 6.3.3.1-6.3.3.37: reglas separadas por archivo y por syscall, `fchmodat2`, y el flag `-c` (6.3.3.35, seguir cargando reglas ante un error). |
+
 ## 9. Verificación
 
 - `sudo ./scripts/verify.sh`: chequeos rápidos PASS/FAIL de cada requisito (firewall, SSH, PAM, auditd, AIDE, SIEM),
@@ -287,17 +311,23 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
 
 - `ansible-lint` (perfil `production`) sin observaciones, `ansible-playbook --syntax-check` y `shellcheck`.
 - Ejecución con **ansible-core 2.14.18** (la versión que publica CentOS Stream 9 / AppStream) y `ansible.posix 1.5.4`
-  dentro de un contenedor **Rocky Linux 9.8**, con archivos de configuración reales y simulando sólo lo que un
+  dentro de un contenedor **Rocky Linux 9.8**, y con **ansible-core 2.16.19** (la de CentOS Stream 10) dentro de un
+  contenedor **Rocky Linux 10.2**. Se usaron archivos de configuración reales y se simuló sólo lo que un
   contenedor no tiene (systemd, firewalld, kernel, auditd, grubby):
   - ejecución completa sin errores y segunda ejecución sin cambios atribuibles al rol (idempotencia);
   - variantes `wazuh` y `syslog`, SSH restringido a redes IPv4/IPv6 y modo `--check`;
   - protecciones de preflight: sin administrador, sin claves SSH y sin dirección de SIEM.
-- Módulos de crypto policy aplicados con `update-crypto-policies` real en Rocky 9.8.
+- Módulos de crypto policy aplicados con `update-crypto-policies` real en Rocky 9.8 y en Rocky 10.2.
+- Cada ID de CIS citado en las tareas se contrastó automáticamente con la lista de controles del benchmark
+  correspondiente (RHEL 9 v2.0.0 y RHEL 10 v1.0.1).
 - Directivas de `sshd` verificadas contra el código fuente de OpenSSH 8.7, y parámetros de rsyslog contra rsyslog 8.2310.
 
 **Limitaciones (pendiente de validar por el equipo en la VM real antes de la defensa):** no se ejecutó sobre una VM
-Rocky completa (servicios systemd, firewalld, SELinux, carga de reglas auditd en el kernel, enrolamiento real de
+Rocky 9 ni Rocky 10 completa (servicios systemd, firewalld, SELinux, carga de reglas auditd en el kernel, enrolamiento real de
 Wazuh). Ejecutar primero `--check`, luego la ejecución real, reiniciar y correr `scripts/verify.sh`.
+
+Para Rocky 10 además queda sin verificar: que el agente Wazuh 4.x tenga soporte oficial para EL10, y si CIS publicó
+un benchmark específico de Rocky Linux 10 (aquí se usa el de RHEL 10, que es binariamente compatible).
 
 ## 12. Uso de IA generativa
 

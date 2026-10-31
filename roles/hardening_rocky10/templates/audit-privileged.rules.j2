@@ -1,0 +1,7 @@
+## {{ hardening_managed_comment }}
+##
+## CIS 6.3.3.10 - use of privileged (setuid/setgid) commands.
+## Generated from the programs found on this host's local file systems.
+{% for program in hardening_audit_privileged_programs %}
+-a always,exit -F path={{ program }} -F perm=x -F auid>={{ hardening_uid_min }} -F auid!=unset -k privileged
+{% endfor %}

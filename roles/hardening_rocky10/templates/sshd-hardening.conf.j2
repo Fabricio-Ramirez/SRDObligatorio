@@ -1,0 +1,51 @@
+# {{ hardening_managed_comment }}
+#
+# Hardened OpenSSH server settings - CIS RHEL 10 v1.0.1 (Rocky Linux 10), section 5.1.
+# sshd reads the files in sshd_config.d in lexical order and, for most
+# keywords, keeps the FIRST value it finds. This file is "00-" so it wins over
+# 01-permitrootlogin.conf (installer) and 50-redhat.conf (distribution).
+# Ciphers, MACs and KexAlgorithms are NOT set here on purpose: they come from
+# the system-wide crypto policy (CIS 1.6 / 5.1.6 / 5.1.12 / 5.1.15).
+
+# 5.1.14 Logging
+LogLevel {{ hardening_ssh_log_level }}
+
+# 5.1.22 PAM (account checks, faillock, password quality)
+UsePAM yes
+
+# 5.1.20 / 5.1.19 / 5.1.21 / 5.1.10 / 5.1.11
+PermitRootLogin no
+PermitEmptyPasswords no
+PermitUserEnvironment no
+HostbasedAuthentication no
+IgnoreRhosts yes
+
+# Authentication methods
+PubkeyAuthentication yes
+PasswordAuthentication {{ 'yes' if hardening_ssh_password_authentication | bool else 'no' }}
+KbdInteractiveAuthentication {{ 'yes' if hardening_ssh_kbd_interactive_authentication | bool else 'no' }}
+# 5.1.9 [L2]
+GSSAPIAuthentication {{ 'yes' if hardening_ssh_gssapi_authentication | bool else 'no' }}
+
+# 5.1.16 / 5.1.17 / 5.1.18 / 5.1.13 Brute force and DoS limits
+MaxAuthTries {{ hardening_ssh_max_auth_tries }}
+MaxStartups {{ hardening_ssh_max_startups }}
+MaxSessions {{ hardening_ssh_max_sessions }}
+LoginGraceTime {{ hardening_ssh_login_grace_time }}
+
+# 5.1.7 Idle / dead session detection
+ClientAliveInterval {{ hardening_ssh_client_alive_interval }}
+ClientAliveCountMax {{ hardening_ssh_client_alive_count_max }}
+
+# 5.1.8 [L2] Forwarding (a bastion / jump host needs it: see README)
+X11Forwarding no
+DisableForwarding {{ 'yes' if hardening_ssh_disable_forwarding | bool else 'no' }}
+PermitTunnel no
+
+# 5.1.5 Warning banner
+Banner /etc/issue.net
+{% if hardening_ssh_allow_groups | length > 0 %}
+
+# 5.1.4 Only these groups may log in
+AllowGroups {{ hardening_ssh_allow_groups | join(' ') }}
+{% endif %}

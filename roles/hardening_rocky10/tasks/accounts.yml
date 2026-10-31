@@ -1,0 +1,128 @@
+---
+- name: CIS 5.4 | Read local users
+  ansible.builtin.getent:
+    database: passwd
+
+- name: CIS 5.4 | Read local shadow entries
+  ansible.builtin.getent:
+    database: shadow
+
+- name: CIS 5.4 | Read local groups
+  ansible.builtin.getent:
+    database: group
+
+# passwd entry: [password, uid, gid, gecos, home, shell]
+# shadow entry: [hash, lastchg, min, max, warn, inactive, expire, flag]
+# group entry:  [password, gid, members]
+
+# --- 5.4.2 Root and system accounts ------------------------------------------
+- name: CIS 5.4.2.1-5.4.2.3 | Report extra UID 0 / GID 0 accounts and groups
+  ansible.builtin.set_fact:
+    hardening_warnings: "{{ hardening_warnings + [item.msg ~ ': ' ~ (item.found | join(', '))] }}"
+  loop:
+    - msg: CIS 5.4.2.1 accounts with UID 0 besides root
+      found: "{{ _passwd | selectattr('value.1', 'equalto', '0') | map(attribute='key') | list | difference(['root']) }}"
+    - msg: CIS 5.4.2.2 accounts with GID 0 besides root/sync/shutdown/halt/operator
+      found: >-
+        {{ _passwd | selectattr('value.2', 'equalto', '0') | map(attribute='key') | list
+           | difference(['root', 'sync', 'shutdown', 'halt', 'operator']) }}
+    - msg: CIS 5.4.2.3 groups with GID 0 besides root
+      found: >-
+        {{ ansible_facts['getent_group'] | dict2items | selectattr('value.1', 'equalto', '0')
+           | map(attribute='key') | list | difference(['root']) }}
+  vars:
+    _passwd: "{{ ansible_facts['getent_passwd'] | dict2items }}"
+  loop_control:
+    label: "{{ item.msg }}"
+  when: item.found | length > 0
+
+- name: CIS 5.4.2.4 / 7.2.2 | Lock accounts that have an empty password field
+  ansible.builtin.command: "usermod -L {{ item.key }}"
+  loop: "{{ ansible_facts['getent_shadow'] | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: item.value[0] | length == 0
+  changed_when: true
+
+- name: CIS 5.4.2.7 | Ensure system accounts do not have a valid login shell
+  ansible.builtin.user:
+    name: "{{ item.key }}"
+    shell: /usr/sbin/nologin
+  loop: "{{ ansible_facts['getent_passwd'] | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - item.value[1] | int < hardening_uid_min
+    - item.key not in hardening_system_accounts_keep_shell
+    - item.value[5] not in ['/sbin/nologin', '/usr/sbin/nologin', '/bin/false', '/usr/bin/false']
+
+- name: CIS 5.4.2.8 | Ensure accounts without a valid login shell are locked
+  ansible.builtin.command: "usermod -L {{ item.key }}"
+  loop: "{{ ansible_facts['getent_passwd'] | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - item.key != 'root'
+    - item.key in ansible_facts['getent_shadow']
+    - (item.value[1] | int < hardening_uid_min and item.key not in hardening_system_accounts_keep_shell)
+      or item.value[5] in ['/sbin/nologin', '/usr/sbin/nologin', '/bin/false', '/usr/bin/false']
+    - not (ansible_facts['getent_shadow'][item.key][0] is match('^[!*]'))
+  changed_when: true
+
+# --- 5.4.1 Password aging of existing accounts -------------------------------
+# root gets max/min/warn but never --inactive, so the console break-glass
+# account cannot be locked by inactivity.
+- name: CIS 5.4.1.1-5.4.1.5 | Apply password aging to existing accounts with a password
+  ansible.builtin.command: >-
+    chage --mindays {{ hardening_pass_min_days }} --maxdays {{ hardening_pass_max_days }}
+    --warndays {{ hardening_pass_warn_age }}
+    {{ ('--inactive ' ~ hardening_inactive_days) if item.key != 'root' else '' }} {{ item.key }}
+  loop: "{{ ansible_facts['getent_shadow'] | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - hardening_apply_aging_to_existing_users | bool
+    - item.value[0] is match('^\$')
+    - item.key in ansible_facts['getent_passwd']
+    - item.key == 'root' or (ansible_facts['getent_passwd'][item.key][1] | int >= hardening_uid_min)
+    - >-
+      item.value[2] != (hardening_pass_min_days | string)
+      or item.value[3] != (hardening_pass_max_days | string)
+      or item.value[4] != (hardening_pass_warn_age | string)
+      or (item.key != 'root' and item.value[5] != (hardening_inactive_days | string))
+  changed_when: true
+
+- name: CIS 5.4.1.6 | Report accounts whose last password change is in the future
+  ansible.builtin.set_fact:
+    hardening_warnings: "{{ hardening_warnings + ['CIS 5.4.1.6: last password change in the future: ' ~ item.key] }}"
+  loop: "{{ ansible_facts['getent_shadow'] | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when:
+    - item.value[1] is match('^[0-9]+$')
+    - (item.value[1] | int) > ((ansible_facts['date_time']['epoch'] | int) // 86400)
+
+# --- 5.4.3 User environment ---------------------------------------------------
+- name: CIS 5.4.3.2 | Ensure default user shell timeout is configured
+  ansible.builtin.copy:
+    dest: /etc/profile.d/50-cis-tmout.sh
+    content: |
+      # {{ hardening_managed_comment }}
+      # CIS 5.4.3.2 - close idle interactive shells
+      TMOUT={{ hardening_shell_timeout }}
+      readonly TMOUT
+      export TMOUT
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: CIS 5.4.2.6 / 5.4.3.3 | Ensure default user and root umask is configured
+  ansible.builtin.copy:
+    dest: /etc/profile.d/50-cis-umask.sh
+    content: |
+      # {{ hardening_managed_comment }}
+      # CIS 5.4.2.6 / 5.4.3.3 - new files are not readable by "other"
+      umask {{ hardening_umask }}
+    owner: root
+    group: root
+    mode: "0644"

@@ -1,0 +1,147 @@
+---
+- name: CIS 4.1.1 | Ensure firewalld is installed
+  ansible.builtin.dnf:
+    name:
+      - nftables
+      - firewalld
+      - python3-firewall
+    state: present
+
+- name: "[extra] CIS 4.1 | Ensure iptables-services is not installed (single firewall utility)"
+  ansible.builtin.dnf:
+    name: iptables-services
+    state: absent
+
+- name: "[extra] CIS 4.1 | Ensure the standalone nftables service is not in use"
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: false
+    state: stopped
+
+- name: CIS 4.1.2 | Ensure the firewalld backend is configured
+  ansible.builtin.lineinfile:
+    path: /etc/firewalld/firewalld.conf
+    regexp: '^\s*#?\s*FirewallBackend\s*='
+    line: "FirewallBackend={{ hardening_firewall_backend }}"
+  notify: Restart firewalld
+
+- name: CIS 4.1.3 | Ensure firewalld.service is enabled and running
+  ansible.builtin.systemd:
+    name: firewalld
+    enabled: true
+    state: started
+
+# When SSH is restricted to admin networks, the generic "ssh" service is dropped
+# and replaced by source-based rich rules.
+- name: CIS 4.1.7 | Compute the services to allow and to drop
+  ansible.builtin.set_fact:
+    hardening_fw_services_allowed: "{{ _allowed }}"
+    hardening_fw_services_dropped: >-
+      {{ (hardening_firewall_removed_services + (['ssh'] if _restricted else [])) | difference(_allowed) }}
+  vars:
+    _restricted: "{{ hardening_ssh_allowed_networks | length > 0 }}"
+    _allowed: "{{ hardening_firewall_allowed_services | difference(['ssh'] if _restricted else []) }}"
+
+- name: CIS 4.1.4 | Read the default zone
+  ansible.builtin.command: firewall-cmd --get-default-zone
+  register: hardening_fw_default_zone
+  changed_when: false
+  check_mode: false
+
+- name: CIS 4.1.4 | Ensure the default zone is {{ hardening_firewall_zone }}
+  ansible.builtin.command: "firewall-cmd --set-default-zone={{ hardening_firewall_zone }}"
+  changed_when: true
+  when: hardening_fw_default_zone.stdout | trim != hardening_firewall_zone
+
+# Secure administrative access: the SSH rich rules are added BEFORE the generic
+# "ssh" service is removed, so an admin session from those networks survives.
+- name: Secure admin access | Allow SSH only from the administration networks
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    rich_rule: >-
+      rule family="{{ 'ipv6' if ':' in item else 'ipv4' }}" source address="{{ item }}" service name="ssh" accept
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ hardening_ssh_allowed_networks }}"
+
+- name: CIS 4.1.7 | Ensure only the required services are allowed
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ hardening_fw_services_allowed }}"
+
+- name: CIS 4.1.7 | Ensure only the required ports are allowed
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ hardening_firewall_allowed_ports }}"
+
+- name: CIS 4.1.7 | Ensure the extra rich rules are present
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    rich_rule: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ hardening_firewall_rich_rules }}"
+
+- name: CIS 4.1.7 | Ensure unnecessary services are dropped
+  ansible.posix.firewalld:
+    zone: "{{ hardening_firewall_zone }}"
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: disabled
+  loop: "{{ hardening_fw_services_dropped }}"
+
+- name: CIS 4.1.5 | Ensure loopback traffic is assigned to the trusted zone
+  ansible.posix.firewalld:
+    zone: trusted
+    interface: lo
+    permanent: true
+    immediate: true
+    state: enabled
+
+- name: CIS 4.1.6 | Ensure loopback addresses are only accepted on the loopback interface
+  ansible.posix.firewalld:
+    zone: trusted
+    rich_rule: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop:
+    - rule family="ipv4" source address="127.0.0.1" destination not address="127.0.0.1" drop
+    - rule family="ipv6" source address="::1" destination not address="::1" drop
+
+- name: CIS 4.1.4 | Read the target of the active zone
+  ansible.builtin.command: "firewall-cmd --permanent --zone={{ hardening_firewall_zone }} --get-target"
+  register: hardening_fw_zone_target
+  changed_when: false
+  check_mode: false
+  when: hardening_firewall_zone_target | length > 0
+
+- name: CIS 4.1.4 | Ensure the target of the active zone
+  ansible.builtin.command: "firewall-cmd --permanent --zone={{ hardening_firewall_zone }} --set-target={{ hardening_firewall_zone_target }}"
+  changed_when: true
+  notify: Reload firewalld
+  when:
+    - hardening_firewall_zone_target | length > 0
+    - hardening_fw_zone_target.stdout | trim != hardening_firewall_zone_target
+
+- name: SIEM | Read the firewalld denied-packet logging setting
+  ansible.builtin.command: firewall-cmd --get-log-denied
+  register: hardening_fw_log_denied
+  changed_when: false
+  check_mode: false
+
+- name: SIEM | Log packets rejected by firewalld
+  ansible.builtin.command: "firewall-cmd --set-log-denied={{ hardening_firewall_log_denied }}"
+  changed_when: true
+  when: hardening_fw_log_denied.stdout | trim != hardening_firewall_log_denied

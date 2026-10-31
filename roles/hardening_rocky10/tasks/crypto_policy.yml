@@ -1,0 +1,55 @@
+---
+- name: CIS 1.6 | Ensure crypto-policies tools are installed
+  ansible.builtin.dnf:
+    name:
+      - crypto-policies
+      - crypto-policies-scripts
+    state: present
+
+- name: CIS 1.6.2-1.6.4 | Install crypto policy sub-policy modules
+  ansible.builtin.copy:
+    dest: "/etc/crypto-policies/policies/modules/{{ item.name }}.pmod"
+    content: |
+      # {{ hardening_managed_comment }}
+      # {{ item.comment }}
+      {{ item.rule }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ hardening_crypto_policy_modules }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: hardening_crypto_modules
+
+- name: CIS 1.6.1 | Read the current system-wide crypto policy
+  ansible.builtin.command: update-crypto-policies --show
+  register: hardening_crypto_current
+  changed_when: false
+  check_mode: false
+
+- name: CIS 1.6.1 | Ensure the system-wide crypto policy is not LEGACY
+  ansible.builtin.assert:
+    that: not (hardening_crypto_policy | upper).startswith('LEGACY')
+    fail_msg: CIS 1.6.1 forbids the LEGACY crypto policy.
+    quiet: true
+
+- name: CIS 1.6.1-1.6.4 / 5.1.6 / 5.1.12 / 5.1.15 | Apply the system-wide crypto policy
+  ansible.builtin.command: "update-crypto-policies --set {{ hardening_crypto_policy }}"
+  when: >-
+    hardening_crypto_current.stdout | trim != hardening_crypto_policy
+    or hardening_crypto_modules is changed
+  register: hardening_crypto_set
+  changed_when: true
+  notify: Restart sshd
+
+- name: CIS 1.6.1 | Flag reboot so every service picks up the new crypto policy
+  ansible.builtin.set_fact:
+    hardening_reboot_reasons: "{{ hardening_reboot_reasons + ['System-wide crypto policy changed'] }}"
+  when: hardening_crypto_set is changed  # noqa: no-handler
+
+- name: "[extra] CIS 5.1.6 / 5.1.15 | Ensure the crypto policy is not overridden in the sshd configuration"
+  ansible.builtin.lineinfile:
+    path: /etc/sysconfig/sshd
+    regexp: '^\s*CRYPTO_POLICY\s*='
+    state: absent
+  notify: Restart sshd

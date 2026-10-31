@@ -1,0 +1,37 @@
+---
+- name: Summary | Save the run report on the server
+  ansible.builtin.copy:
+    dest: /var/log/hardening-report.txt
+    content: |
+      Hardening run: {{ ansible_facts['date_time']['iso8601'] }}
+      Host: {{ inventory_hostname }} ({{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }})
+      Baseline: CIS Red Hat Enterprise Linux 10 Benchmark v1.0.1 - Level 1 Server (+ auditd L2, SIEM integration)
+      SIEM: {{ hardening_siem_type }} {{ hardening_siem_host }}
+
+      Reboot required:
+      {% for reason in hardening_reboot_reasons | default([]) %}
+        - {{ reason }}
+      {% else %}
+        - no
+      {% endfor %}
+
+      Items for manual review:
+      {% for warning in hardening_warnings | default([]) %}
+        - {{ warning }}
+      {% else %}
+        - none
+      {% endfor %}
+    owner: root
+    group: root
+    mode: "0600"
+  changed_when: false
+
+- name: Summary | Items that need manual review
+  ansible.builtin.debug:
+    msg: "{{ hardening_warnings | default([]) if hardening_warnings | default([]) | length > 0 else 'none' }}"
+
+- name: Summary | Reboot status
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('REBOOT REQUIRED: ' ~ (hardening_reboot_reasons | join('; ')))
+         if hardening_reboot_reasons | default([]) | length > 0 else 'No reboot required' }}

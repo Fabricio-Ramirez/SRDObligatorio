@@ -27,6 +27,9 @@ mount_has() { findmnt -kn -o OPTIONS "$1" 2>/dev/null | tr ',' '\n' | grep -qx "
 
 section "1.1 Filesystem"
 check "cramfs module not loadable"         sh -c "modprobe -n -v cramfs 2>&1 | grep -q '/bin/false'"
+if grep -q '^VERSION_ID="10' /etc/os-release; then
+  check "sctp module not loadable (Rocky 10)" sh -c "modprobe -n -v sctp 2>&1 | grep -q '/bin/false'"
+fi
 check "usb-storage module not loadable"    sh -c "modprobe -n -v usb-storage 2>&1 | grep -q '/bin/false'"
 check "/tmp is a separate mount"           findmnt -kn /tmp
 check "/tmp mounted noexec"                mount_has /tmp noexec
@@ -60,7 +63,11 @@ check "MaxAuthTries 4"                     sshd_has "maxauthtries 4"
 check "X11Forwarding no"                   sshd_has "x11forwarding no"
 check "LogLevel VERBOSE or INFO"           sh -c "sshd -T | grep -qiE '^loglevel (verbose|info)$'"
 check "Banner configured"                  sshd_has "banner /etc/issue.net"
-check "No CBC/chacha20 ciphers"            sh -c "! sshd -T | grep -i '^ciphers' | grep -qiE 'cbc|chacha20'"
+check "No CBC ciphers"                     sh -c "! sshd -T | grep -i '^ciphers' | grep -qi cbc"
+# chacha20-poly1305 is disabled only by the Rocky 9 baseline (CIS RHEL 9 1.6.6).
+if grep -q '^VERSION_ID="9' /etc/os-release; then
+  check "No chacha20 cipher (Rocky 9)"      sh -c "! sshd -T | grep -i '^ciphers' | grep -qi chacha20"
+fi
 echo "  $(sshd -T | grep -iE '^(ciphers|macs|allowgroups|passwordauthentication) ' | tr '\n' ';')"
 
 section "5.2 / 5.3 sudo and PAM"
@@ -98,16 +105,16 @@ if [[ "${1:-}" == "--oscap" ]]; then
   section "OpenSCAP - CIS Level 1 Server"
   dnf -y -q install openscap-scanner scap-security-guide || exit 1
   DS=""
-  for f in /usr/share/xml/scap/ssg/content/ssg-rl9-ds.xml /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml; do
+  for f in /usr/share/xml/scap/ssg/content/ssg-rl{9,10}-ds.xml /usr/share/xml/scap/ssg/content/ssg-rhel{9,10}-ds.xml; do
     [[ -f "$f" ]] && { DS="$f"; break; }
   done
-  [[ -n "${DS}" ]] || { echo "No RHEL 9 compatible SCAP datastream found." >&2; exit 1; }
+  [[ -n "${DS}" ]] || { echo "No RHEL 9/10 compatible SCAP datastream found." >&2; exit 1; }
   REPORT="/root/oscap-cis-l1-$(date +%Y%m%d-%H%M%S).html"
   oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_cis_server_l1 \
     --report "${REPORT}" "${DS}" >/dev/null 2>&1
   echo "  Datastream: ${DS}"
   echo "  HTML report: ${REPORT}"
-  echo "  Note: if most rules are 'notapplicable', the SCAP content does not recognise this OS as RHEL 9."
+  echo "  Note: if most rules are 'notapplicable', the SCAP content does not recognise this OS as RHEL."
 fi
 
 [[ ${FAIL} -eq 0 ]]

@@ -1,0 +1,6 @@
+# {{ hardening_managed_comment }}
+# CIS RHEL 10 1.1.1.x / 3.2.x - kernel modules that must not be available.
+{% for module in hardening_disabled_kernel_modules %}
+install {{ module }} /bin/false
+blacklist {{ module }}
+{% endfor %}
