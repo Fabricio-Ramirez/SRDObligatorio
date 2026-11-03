@@ -1,0 +1,28 @@
+---
+- name: Config | Write the engine configuration (contains credentials)
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: /etc/vulnmgmt/config.json
+    owner: root
+    group: vulnmgmt
+    mode: "0640"
+  diff: false
+  no_log: true
+
+- name: Config | Rotate the SIEM events log
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/vulnmgmt
+    content: |
+      # {{ vulnmgmt_managed_comment }}
+      /var/log/vulnmgmt/events.json {
+          weekly
+          rotate 8
+          compress
+          delaycompress
+          missingok
+          notifempty
+          copytruncate
+      }
+    owner: root
+    group: root
+    mode: "0644"

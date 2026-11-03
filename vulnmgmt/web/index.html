@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gestión de Vulnerabilidades</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Gestión de Vulnerabilidades</h1>
+      <p class="sub">Corporación de Generación S.A. — servidores monitoreados por Wazuh</p>
+    </div>
+    <div class="meta" id="meta" aria-live="polite">Cargando…</div>
+  </header>
+
+  <div id="demo-banner" class="banner demo" hidden>DATOS DE DEMOSTRACIÓN — informe sintético, no corresponde a la infraestructura real.</div>
+  <ul id="warnings" class="banner warn" hidden></ul>
+
+  <main>
+    <section class="kpis" id="kpis" aria-label="Indicadores"></section>
+
+    <section class="card">
+      <h2>Distribución por severidad</h2>
+      <div id="sevbar" class="sevbar" role="img" aria-label="Vulnerabilidades por severidad"></div>
+      <div id="sevlegend" class="legend"></div>
+    </section>
+
+    <section class="card" id="ai">
+      <div class="card-head">
+        <h2>Análisis y recomendaciones</h2>
+        <span id="ai-badge" class="badge"></span>
+      </div>
+      <p id="ai-summary" class="lead"></p>
+      <div class="cols">
+        <div><h3>Riesgos clave</h3><ul id="ai-risks"></ul></div>
+        <div><h3>Ventana de mantenimiento sugerida</h3><p id="ai-window"></p></div>
+      </div>
+      <p class="note" id="ai-note"></p>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Acciones priorizadas</h2>
+        <div class="downloads">
+          <a href="data/actionables.csv" download>Descargar CSV</a>
+          <a href="data/latest.json" download>Descargar JSON</a>
+        </div>
+      </div>
+      <form class="filters" id="filters" aria-label="Filtros">
+        <fieldset id="prio-filter"><legend>Prioridad</legend></fieldset>
+        <label>Tipo
+          <select id="f-action">
+            <option value="">Todas</option>
+            <option value="actualizar">Actualizar</option>
+            <option value="mitigar">Mitigar (sin parche)</option>
+            <option value="revisar">Revisar</option>
+          </select>
+        </label>
+        <label>Buscar <input id="f-text" type="search" placeholder="paquete, servidor o CVE"></label>
+        <label class="check"><input id="f-overdue" type="checkbox"> Sólo vencidas</label>
+      </form>
+      <div class="table-wrap">
+        <table id="actions">
+          <thead><tr>
+            <th scope="col">Prioridad</th><th scope="col">Riesgo</th><th scope="col">Acción</th>
+            <th scope="col">Paquete</th><th scope="col">Servidores</th><th scope="col">CVE</th>
+            <th scope="col">KEV</th><th scope="col">Vence</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="actions-empty" hidden>No hay acciones que coincidan con los filtros.</p>
+    </section>
+
+    <section class="card">
+      <h2>Servidores</h2>
+      <div class="table-wrap">
+        <table id="hosts">
+          <thead><tr>
+            <th scope="col">Servidor</th><th scope="col">Sistema</th><th scope="col">Criticidad</th>
+            <th scope="col">Estado agente</th><th scope="col">Crít.</th><th scope="col">Altas</th>
+            <th scope="col">Medias</th><th scope="col">Bajas</th><th scope="col">KEV</th>
+            <th scope="col">Riesgo máx.</th><th scope="col">Acciones</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Tendencia</h2>
+      <div id="trend" class="trend"></div>
+      <div id="trend-legend" class="legend"></div>
+    </section>
+
+    <section class="card">
+      <h2>Metodología de priorización</h2>
+      <div id="method"></div>
+    </section>
+  </main>
+
+  <footer>
+    <span id="foot"></span>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>

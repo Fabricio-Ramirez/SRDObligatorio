@@ -1,0 +1,46 @@
+{{ {
+  "_comment": vulnmgmt_managed_comment,
+  "indexer": {
+    "url": vulnmgmt_indexer_url,
+    "username": vulnmgmt_engine_indexer_user,
+    "password": vulnmgmt_engine_indexer_password,
+    "ca_file": "/etc/vulnmgmt/indexer-ca.pem" if vulnmgmt_indexer_ca.stat.exists else "",
+    "verify_tls": vulnmgmt_indexer_verify_tls | bool,
+    "index": vulnmgmt_indexer_index,
+    "page_size": 1000,
+    "timeout": 60
+  },
+  "api": {
+    "enabled": (vulnmgmt_api_password | length > 0),
+    "url": vulnmgmt_api_url,
+    "username": vulnmgmt_api_user,
+    "password": vulnmgmt_api_password,
+    "verify_tls": vulnmgmt_api_verify_tls | bool,
+    "timeout": 30
+  },
+  "intel": {
+    "enabled": vulnmgmt_intel_enabled | bool,
+    "cache_dir": "/var/lib/vulnmgmt/intel",
+    "cache_hours": 24,
+    "timeout": 30
+  },
+  "scoring": vulnmgmt_scoring,
+  "ai": {
+    "enabled": vulnmgmt_ai_enabled | bool,
+    "url": "http://127.0.0.1:11434",
+    "models": vulnmgmt_ai_models,
+    "max_actions": vulnmgmt_ai_max_actions,
+    "num_ctx": vulnmgmt_ai_num_ctx,
+    "num_predict": vulnmgmt_ai_num_predict,
+    "threads": vulnmgmt_ai_threads,
+    "timeout": vulnmgmt_ai_timeout,
+    "temperature": 0.2
+  },
+  "output": {
+    "web_data_dir": "/var/www/vulnmgmt/data",
+    "state_dir": "/var/lib/vulnmgmt",
+    "history_runs": vulnmgmt_history_runs,
+    "wazuh_events_log": "/var/log/vulnmgmt/events.json" if vulnmgmt_wazuh_rules | bool else "",
+    "wazuh_event_priorities": vulnmgmt_wazuh_event_priorities
+  }
+} | to_nice_json(indent=2) }}

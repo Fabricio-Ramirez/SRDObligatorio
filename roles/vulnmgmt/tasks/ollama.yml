@@ -1,0 +1,91 @@
+---
+# Same layout as Ollama's official install script (binary in /usr/local/bin,
+# libraries in /usr/local/lib/ollama, "ollama" system user), but with a pinned
+# version, a SHA-256 check and a hardened, resource-limited systemd unit.
+- name: AI | Map the CPU architecture
+  ansible.builtin.set_fact:
+    vulnmgmt_ollama_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] }}"
+
+- name: AI | Download the pinned Ollama release (checksum verified)
+  ansible.builtin.get_url:
+    url: "{{ vulnmgmt_ollama_release_url }}/ollama-linux-{{ vulnmgmt_ollama_arch }}.tar.zst"
+    dest: "/var/cache/vulnmgmt/ollama-{{ vulnmgmt_ollama_version }}-{{ vulnmgmt_ollama_arch }}.tar.zst"
+    checksum: "sha256:{{ vulnmgmt_ollama_release_url }}/sha256sum.txt"
+    mode: "0600"
+    timeout: 120
+
+- name: AI | Check the installed Ollama version
+  ansible.builtin.stat:
+    path: "/usr/local/lib/ollama/.vulnmgmt-{{ vulnmgmt_ollama_version }}"
+  register: vulnmgmt_ollama_marker
+
+- name: AI | Remove a previous Ollama version
+  ansible.builtin.file:
+    path: /usr/local/lib/ollama
+    state: absent
+  when: not vulnmgmt_ollama_marker.stat.exists
+
+# unarchive's .tar.zst support depends on the ansible-core version; GNU tar
+# (>= 1.31, Rocky 9/10) handles it directly.
+- name: AI | Extract Ollama into /usr/local  # noqa: command-instead-of-module
+  ansible.builtin.command: >-
+    tar --zstd -xf /var/cache/vulnmgmt/ollama-{{ vulnmgmt_ollama_version }}-{{ vulnmgmt_ollama_arch }}.tar.zst
+    -C /usr/local
+  changed_when: true
+  when: not vulnmgmt_ollama_marker.stat.exists
+  notify: Restart ollama
+
+- name: AI | Mark the installed version
+  ansible.builtin.copy:
+    dest: "/usr/local/lib/ollama/.vulnmgmt-{{ vulnmgmt_ollama_version }}"
+    content: "{{ vulnmgmt_ollama_version }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: AI | Create the ollama system user
+  ansible.builtin.user:
+    name: ollama
+    system: true
+    shell: /sbin/nologin
+    home: /usr/share/ollama
+    create_home: true
+
+- name: AI | Install the resource-limited Ollama service
+  ansible.builtin.template:
+    src: ollama.service.j2
+    dest: /etc/systemd/system/ollama.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart ollama
+
+- name: AI | Ensure Ollama is enabled and running
+  ansible.builtin.systemd:
+    name: ollama
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: AI | Wait for the Ollama API
+  ansible.builtin.uri:
+    url: http://127.0.0.1:11434/api/tags
+    return_content: true
+  register: vulnmgmt_ollama_tags
+  retries: 12
+  delay: 5
+  until: vulnmgmt_ollama_tags.status == 200
+
+# Models are downloaded once (about 1 GB for qwen2.5:1.5b, 0.4 GB for 0.5b).
+- name: AI | Download the small language models
+  ansible.builtin.uri:
+    url: http://127.0.0.1:11434/api/pull
+    method: POST
+    body_format: json
+    body: {model: "{{ item.name }}", stream: false}
+    timeout: 3600
+  loop: "{{ vulnmgmt_ai_models }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name not in (vulnmgmt_ollama_tags.json.models | map(attribute='name') | list)
+  changed_when: true

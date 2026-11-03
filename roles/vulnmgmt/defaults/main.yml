@@ -1,0 +1,96 @@
+---
+# =============================================================================
+# Vulnerability management platform (assignment item 5) - runs ON the Wazuh
+# server (all-in-one: manager + indexer + dashboard, Wazuh >= 4.8).
+#
+# Secrets (passwords) must be passed with --extra-vars / ansible-vault; the
+# role never writes them into the repository.
+# =============================================================================
+
+vulnmgmt_supported_major_versions: ["9", "10"]
+vulnmgmt_managed_comment: "Managed by Ansible (role: vulnmgmt) - local changes will be overwritten"
+
+# --- Wazuh indexer (source of the vulnerability data) -------------------------
+vulnmgmt_indexer_url: https://127.0.0.1:9200
+# CA that signed the indexer certificate (Wazuh install assistant default).
+vulnmgmt_indexer_ca_source: /etc/wazuh-indexer/certs/root-ca.pem
+vulnmgmt_indexer_verify_tls: true
+vulnmgmt_indexer_index: wazuh-states-vulnerabilities-*
+# Least privilege: with the admin credentials the role creates a dedicated
+# read-only user ("vulnmgmt-reader", read on the vulnerability index only)
+# and the engine uses that one. The admin password is not stored.
+vulnmgmt_indexer_create_reader: true
+vulnmgmt_indexer_admin_user: admin
+vulnmgmt_indexer_admin_password: ""
+vulnmgmt_indexer_reader_user: vulnmgmt-reader
+# Used only when vulnmgmt_indexer_create_reader is false.
+vulnmgmt_indexer_user: ""
+vulnmgmt_indexer_password: ""
+
+# --- Wazuh server API (optional: agent inventory / coverage) ------------------
+vulnmgmt_api_url: https://127.0.0.1:55000
+vulnmgmt_api_user: ""          # e.g. a user with the "readonly" RBAC role
+vulnmgmt_api_password: ""
+# The API ships a self-signed certificate for its own hostname; on loopback
+# the traffic never leaves the host.
+vulnmgmt_api_verify_tls: false
+
+# --- Threat intelligence ---------------------------------------------------------
+vulnmgmt_intel_enabled: true
+
+# --- Prioritisation (see vulnmgmt/engine/vulnmgmt/prioritize.py) ---------------
+vulnmgmt_scoring:
+  weights: {cvss: 6, epss: 25, kev: 15}
+  thresholds: {P1: 75, P2: 55, P3: 35}
+  sla_days: {P1: 7, P2: 30, P3: 90, P4: 180}
+  criticality:
+    default: media
+    factors: {alta: 1.2, media: 1.0, baja: 0.8}
+    hosts: {}                    # e.g. {srv-idp: alta}
+    groups: {}                   # Wazuh agent groups, e.g. {criticos: alta}
+
+# --- Local AI (Ollama) - tuned for a small VM ----------------------------------
+vulnmgmt_ai_enabled: true
+vulnmgmt_ollama_version: "0.40.13"
+vulnmgmt_ollama_release_url: "https://github.com/ollama/ollama/releases/download/v{{ vulnmgmt_ollama_version }}"
+# Tried in order; the first one installed that fits in the free RAM is used.
+vulnmgmt_ai_models:
+  - {name: "qwen2.5:1.5b", min_free_mb: 1800}
+  - {name: "qwen2.5:0.5b", min_free_mb: 900}
+vulnmgmt_ai_max_actions: 8         # tasks sent to the model per run
+vulnmgmt_ai_num_ctx: 4096
+vulnmgmt_ai_num_predict: 900
+vulnmgmt_ai_threads: 0             # 0 = CPUs - 1 (max 4)
+vulnmgmt_ai_timeout: 900           # seconds (CPU inference is slow)
+# systemd limits so the model never starves the Wazuh indexer/manager.
+vulnmgmt_ollama_memory_max: 3G
+vulnmgmt_ollama_cpu_quota: 200%
+
+# --- Web dashboard (nginx) -----------------------------------------------------
+vulnmgmt_web_port: 8443
+vulnmgmt_web_user: infra
+vulnmgmt_web_password: ""          # empty = generated and saved in /etc/vulnmgmt/web.secret
+vulnmgmt_web_server_names: ["{{ ansible_facts['fqdn'] }}", "{{ ansible_facts['default_ipv4']['address'] | default('127.0.0.1') }}"]
+# Networks allowed to reach the dashboard (bastion / admin VPN). Empty = any.
+vulnmgmt_allowed_networks: []
+vulnmgmt_firewall_zone: public
+
+# --- Schedule ---------------------------------------------------------------------
+vulnmgmt_schedule: "*-*-* 03:30:00"   # systemd OnCalendar
+vulnmgmt_history_runs: 90
+vulnmgmt_engine_cpu_quota: 50%
+vulnmgmt_engine_memory_max: 512M
+
+# --- SIEM integration (alerts in Wazuh) ----------------------------------------
+vulnmgmt_wazuh_rules: true
+vulnmgmt_wazuh_event_priorities: [P1, P2]
+
+# --- No-code workflows (n8n Community Edition, Podman) -------------------------
+vulnmgmt_n8n_enabled: true
+vulnmgmt_n8n_image: docker.io/n8nio/n8n:2.46.4
+vulnmgmt_n8n_timezone: America/Montevideo
+vulnmgmt_n8n_memory_max: 1G
+
+# --- First run ----------------------------------------------------------------------
+# demo: publish the synthetic demo report when the indexer has no data yet.
+vulnmgmt_first_run: run

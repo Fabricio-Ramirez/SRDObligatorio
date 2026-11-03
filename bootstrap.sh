@@ -24,6 +24,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/srd-hardening}"
 LOG_DIR="/var/log/srd-hardening"
 SIEM_TYPE="${SIEM_TYPE:-}"
 SIEM_HOST="${SIEM_HOST:-}"
+COMPONENT="${COMPONENT:-hardening}"   # hardening | vulnmgmt
 CHECK_MODE=0
 TAGS=""
 EXTRA_ARGS=()
@@ -37,6 +38,8 @@ usage() {
 Usage: $0 [options] [-- extra ansible-playbook arguments]
 
 Options:
+  --component NAME     hardening (default, every server) or vulnmgmt (vulnerability
+                       management platform, only on the Wazuh server)
   --siem-host HOST     Wazuh manager / syslog collector address (required unless --siem-type none)
   --siem-type TYPE     wazuh (default), syslog or none
   --branch NAME        Git branch to use (default: repository default branch)
@@ -46,13 +49,16 @@ Options:
   --tags LIST          Run only some sections, e.g. --tags ssh,firewall
   -h, --help           Show this help
 
-Environment variables with the same meaning: SIEM_HOST, SIEM_TYPE, REPO_URL,
-REPO_BRANCH, INSTALL_DIR.
+Environment variables with the same meaning: COMPONENT, SIEM_HOST, SIEM_TYPE,
+REPO_URL, REPO_BRANCH, INSTALL_DIR. For --component vulnmgmt the passwords can
+also come from VULNMGMT_INDEXER_ADMIN_PASSWORD, VULNMGMT_API_USER and
+VULNMGMT_API_PASSWORD; otherwise they are asked interactively.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --component) COMPONENT="${2:?--component needs a value}"; shift 2 ;;
     --siem-host) SIEM_HOST="${2:?--siem-host needs a value}"; shift 2 ;;
     --siem-type) SIEM_TYPE="${2:?--siem-type needs a value}"; shift 2 ;;
     --branch)    REPO_BRANCH="${2:?--branch needs a value}"; shift 2 ;;
@@ -78,9 +84,15 @@ case "${VERSION_ID%%.*}" in
   *)  die "This hardening targets Rocky Linux 9 or 10 (found: ${PRETTY_NAME:-unknown})." ;;
 esac
 
+case "${COMPONENT}" in
+  hardening) ;;
+  vulnmgmt)  PLAYBOOK="vulnmgmt.yml" ;;
+  *)         die "Unknown component: ${COMPONENT} (use hardening or vulnmgmt)." ;;
+esac
+
 # The playbook stops early if no SIEM address is configured anywhere
 # (--siem-host or group_vars/all.yml).
-if [[ "${SIEM_TYPE:-wazuh}" != "none" && -z "${SIEM_HOST}" ]]; then
+if [[ "${COMPONENT}" == "hardening" && "${SIEM_TYPE:-wazuh}" != "none" && -z "${SIEM_HOST}" ]]; then
   warn "No --siem-host given: it must be set in group_vars/all.yml, or use --siem-type none."
 fi
 
@@ -130,8 +142,34 @@ ANSIBLE_LOG_PATH="${LOG_DIR}/ansible-$(date +%Y%m%d-%H%M%S).log"
 export ANSIBLE_LOG_PATH
 
 playbook_args=(-i inventory/localhost.ini "${PLAYBOOK}")
-[[ -n "${SIEM_TYPE}" ]] && playbook_args+=(-e "hardening_siem_type=${SIEM_TYPE}")
-[[ -n "${SIEM_HOST}" ]] && playbook_args+=(-e "hardening_siem_host=${SIEM_HOST}")
+
+# Secrets for vulnmgmt go through a private temporary vars file, never on the
+# command line (where any user could read them in the process list).
+if [[ "${COMPONENT}" == "vulnmgmt" ]]; then
+  if [[ -z "${VULNMGMT_INDEXER_ADMIN_PASSWORD:-}" && ! -f /etc/vulnmgmt/indexer.secret ]]; then
+    read -rsp "Wazuh indexer 'admin' password (wazuh-passwords.txt): " VULNMGMT_INDEXER_ADMIN_PASSWORD </dev/tty; echo
+  fi
+  if [[ -z "${VULNMGMT_API_USER:-}" ]]; then
+    read -rp "Wazuh API user for agent inventory (optional, Enter to skip): " VULNMGMT_API_USER </dev/tty
+  fi
+  if [[ -n "${VULNMGMT_API_USER:-}" && -z "${VULNMGMT_API_PASSWORD:-}" ]]; then
+    read -rsp "Wazuh API password for ${VULNMGMT_API_USER}: " VULNMGMT_API_PASSWORD </dev/tty; echo
+  fi
+  export VULNMGMT_INDEXER_ADMIN_PASSWORD VULNMGMT_API_USER VULNMGMT_API_PASSWORD
+  SECRETS_FILE="$(mktemp)"
+  chmod 0600 "${SECRETS_FILE}"
+  trap 'rm -f "${SECRETS_FILE}"' EXIT
+  python3 -c 'import json, os, sys
+json.dump({"vulnmgmt_indexer_admin_password": os.environ.get("VULNMGMT_INDEXER_ADMIN_PASSWORD", ""),
+           "vulnmgmt_api_user": os.environ.get("VULNMGMT_API_USER", ""),
+           "vulnmgmt_api_password": os.environ.get("VULNMGMT_API_PASSWORD", "")}, open(sys.argv[1], "w"))' \
+    "${SECRETS_FILE}"
+  playbook_args+=(-e "@${SECRETS_FILE}")
+fi
+if [[ "${COMPONENT}" == "hardening" ]]; then
+  [[ -n "${SIEM_TYPE}" ]] && playbook_args+=(-e "hardening_siem_type=${SIEM_TYPE}")
+  [[ -n "${SIEM_HOST}" ]] && playbook_args+=(-e "hardening_siem_host=${SIEM_HOST}")
+fi
 [[ -n "${TAGS}" ]] && playbook_args+=(--tags "${TAGS}")
 [[ ${CHECK_MODE} -eq 1 ]] && playbook_args+=(--check --diff)
 playbook_args+=("${EXTRA_ARGS[@]}")
@@ -140,5 +178,9 @@ log "Running: ansible-playbook ${playbook_args[*]}"
 log "Log file: ${ANSIBLE_LOG_PATH}"
 ansible-playbook "${playbook_args[@]}"
 
-log "Done. Report saved in /var/log/hardening-report.txt"
-log "Reboot if the summary above says 'REBOOT REQUIRED', then verify with: ${INSTALL_DIR}/scripts/verify.sh"
+if [[ "${COMPONENT}" == "vulnmgmt" ]]; then
+  log "Done. The dashboard URL and how to reach n8n are shown in the summary above."
+else
+  log "Done. Report saved in /var/log/hardening-report.txt"
+  log "Reboot if the summary above says 'REBOOT REQUIRED', then verify with: ${INSTALL_DIR}/scripts/verify.sh"
+fi

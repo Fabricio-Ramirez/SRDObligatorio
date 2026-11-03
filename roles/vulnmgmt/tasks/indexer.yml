@@ -1,0 +1,84 @@
+---
+- name: Indexer | Look for the indexer root CA
+  ansible.builtin.stat:
+    path: "{{ vulnmgmt_indexer_ca_source }}"
+  register: vulnmgmt_indexer_ca_src
+
+- name: Indexer | Copy the indexer root CA for the engine
+  ansible.builtin.copy:
+    src: "{{ vulnmgmt_indexer_ca_source }}"
+    dest: /etc/vulnmgmt/indexer-ca.pem
+    remote_src: true
+    owner: root
+    group: vulnmgmt
+    mode: "0644"
+  when: vulnmgmt_indexer_ca_src.stat.exists
+
+- name: Indexer | Check the copied CA
+  ansible.builtin.stat:
+    path: /etc/vulnmgmt/indexer-ca.pem
+  register: vulnmgmt_indexer_ca
+
+# --- Least privilege: dedicated read-only user (OpenSearch security API) ------
+- name: Indexer | Create the read-only role, user and role mapping
+  ansible.builtin.uri:
+    url: "{{ vulnmgmt_indexer_url }}/_plugins/_security/api/{{ item.path }}"
+    method: PUT
+    body_format: json
+    body: "{{ item.body }}"
+    url_username: "{{ vulnmgmt_indexer_admin_user }}"
+    url_password: "{{ vulnmgmt_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ vulnmgmt_indexer_verify_tls | bool }}"
+    ca_path: "{{ '/etc/vulnmgmt/indexer-ca.pem' if vulnmgmt_indexer_ca.stat.exists else omit }}"
+    status_code: [200, 201]
+  loop:
+    - path: roles/vulnmgmt_reader
+      body:
+        description: Read-only access to the Wazuh vulnerability states (vulnmgmt engine)
+        cluster_permissions: [cluster_composite_ops_ro]
+        index_permissions:
+          - index_patterns: ["{{ vulnmgmt_indexer_index }}"]
+            allowed_actions: [read]
+    - path: "internalusers/{{ vulnmgmt_indexer_reader_user }}"
+      body:
+        password: "{{ vulnmgmt_reader_password }}"
+        description: vulnmgmt engine (read-only)
+    - path: rolesmapping/vulnmgmt_reader
+      body:
+        users: ["{{ vulnmgmt_indexer_reader_user }}"]
+  loop_control:
+    label: "{{ item.path }}"
+  register: vulnmgmt_reader_api
+  changed_when: vulnmgmt_reader_api.status == 201
+  no_log: true
+  when:
+    - vulnmgmt_indexer_create_reader | bool
+    - vulnmgmt_indexer_admin_password | length > 0
+
+- name: Indexer | Choose the credentials used by the engine
+  ansible.builtin.set_fact:
+    vulnmgmt_engine_indexer_user: >-
+      {{ vulnmgmt_indexer_reader_user if vulnmgmt_indexer_create_reader | bool else vulnmgmt_indexer_user }}
+    vulnmgmt_engine_indexer_password: >-
+      {{ vulnmgmt_reader_password if vulnmgmt_indexer_create_reader | bool else vulnmgmt_indexer_password }}
+  no_log: true
+
+- name: Indexer | Verify that the engine can read the vulnerability index
+  ansible.builtin.uri:
+    url: "{{ vulnmgmt_indexer_url }}/{{ vulnmgmt_indexer_index }}/_count"
+    url_username: "{{ vulnmgmt_engine_indexer_user }}"
+    url_password: "{{ vulnmgmt_engine_indexer_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ vulnmgmt_indexer_verify_tls | bool }}"
+    ca_path: "{{ '/etc/vulnmgmt/indexer-ca.pem' if vulnmgmt_indexer_ca.stat.exists else omit }}"
+    return_content: true
+  register: vulnmgmt_index_count
+  retries: 5
+  delay: 5
+  until: vulnmgmt_index_count.status == 200
+  no_log: true
+
+- name: Indexer | Report the number of vulnerability documents
+  ansible.builtin.debug:
+    msg: "Vulnerability documents in the indexer: {{ vulnmgmt_index_count.json['count'] }}"

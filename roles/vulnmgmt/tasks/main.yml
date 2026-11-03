@@ -1,0 +1,39 @@
+---
+- name: Preflight checks
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [always]
+
+- name: Engine, dashboard files and configuration
+  ansible.builtin.import_tasks: base.yml
+  tags: [base]
+
+- name: Wazuh indexer access (read-only user)
+  ansible.builtin.import_tasks: indexer.yml
+  tags: [indexer]
+
+- name: Engine configuration
+  ansible.builtin.import_tasks: config.yml
+  tags: [config]
+
+- name: Local AI (Ollama)
+  ansible.builtin.import_tasks: ollama.yml
+  when: vulnmgmt_ai_enabled | bool
+  tags: [ai]
+
+- name: Web dashboard (nginx)
+  ansible.builtin.import_tasks: web.yml
+  tags: [web]
+
+- name: SIEM integration (Wazuh rules)
+  ansible.builtin.import_tasks: wazuh.yml
+  when: vulnmgmt_wazuh_rules | bool
+  tags: [siem]
+
+- name: No-code workflows (n8n)
+  ansible.builtin.import_tasks: n8n.yml
+  when: vulnmgmt_n8n_enabled | bool
+  tags: [n8n]
+
+- name: Schedule and first run
+  ansible.builtin.import_tasks: schedule.yml
+  tags: [schedule]

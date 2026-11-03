@@ -1,0 +1,73 @@
+---
+- name: Web | Hash the dashboard password (SHA-512 crypt, fixed salt = idempotent)
+  ansible.builtin.command: "openssl passwd -6 -salt {{ vulnmgmt_web_salt }} -stdin"
+  args:
+    stdin: "{{ vulnmgmt_web_secret }}"
+  register: vulnmgmt_web_hash
+  changed_when: false
+  no_log: true
+
+- name: Web | Write the basic-auth file
+  ansible.builtin.copy:
+    dest: /etc/nginx/vulnmgmt.htpasswd
+    content: "{{ vulnmgmt_web_user }}:{{ vulnmgmt_web_hash.stdout }}\n"
+    owner: root
+    group: nginx
+    mode: "0640"
+  no_log: true
+  notify: Reload nginx
+
+- name: Web | Install the nginx main configuration
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload nginx
+
+# nginx refuses to start if it must listen on [::] and the kernel has no IPv6
+# (ipv6.disable=1), so the IPv6 listener is only added when IPv6 exists.
+- name: Web | Check whether IPv6 is enabled in the kernel
+  ansible.builtin.stat:
+    path: /proc/sys/net/ipv6
+  register: vulnmgmt_ipv6_proc
+
+- name: Web | Install the dashboard site
+  ansible.builtin.template:
+    src: vulnmgmt-nginx.conf.j2
+    dest: /etc/nginx/conf.d/vulnmgmt.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload nginx
+
+# Check the complete configuration before the handler reloads nginx.
+- name: Web | Validate the nginx configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Web | Ensure nginx is enabled and running
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
+
+- name: Web | Allow the dashboard port from the administration networks
+  ansible.posix.firewalld:
+    zone: "{{ vulnmgmt_firewall_zone }}"
+    rich_rule: >-
+      rule family="{{ 'ipv6' if ':' in item else 'ipv4' }}" source address="{{ item }}"
+      port port="{{ vulnmgmt_web_port }}" protocol="tcp" accept
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ vulnmgmt_allowed_networks }}"
+
+- name: Web | Allow the dashboard port from any network
+  ansible.posix.firewalld:
+    zone: "{{ vulnmgmt_firewall_zone }}"
+    port: "{{ vulnmgmt_web_port }}/tcp"
+    permanent: true
+    immediate: true
+    state: "{{ 'enabled' if vulnmgmt_allowed_networks | length == 0 else 'disabled' }}"

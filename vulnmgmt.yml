@@ -1,0 +1,12 @@
+---
+# Vulnerability management platform (assignment item 5). Runs on the Wazuh
+# server itself (manager + indexer).
+#
+# Local run (see bootstrap.sh --component vulnmgmt):
+#   ansible-playbook vulnmgmt.yml -e vulnmgmt_indexer_admin_password=...
+- name: Vulnerability management on the Wazuh server
+  hosts: wazuh_server
+  become: true
+  gather_facts: true
+  roles:
+    - role: vulnmgmt

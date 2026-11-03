@@ -1,0 +1,20 @@
+---
+# Example host_vars for the Wazuh server (all-in-one: manager + indexer +
+# dashboard) that also hosts the vulnerability management platform
+# (vulnmgmt.yml). Rename to host_vars/<inventory_hostname>.yml
+# (e.g. host_vars/srv-siem.yml) BEFORE running the hardening on this server.
+# When bootstrap.sh runs ON the Wazuh server (inventory/localhost.ini) the
+# host is called "localhost": copy it to host_vars/localhost.yml instead.
+
+# CIS 2.1.18 removes nginx, but nginx publishes the vulnerability dashboard
+# (port 8443). Documented exception for this server only.
+hardening_packages_keep: [nginx]
+
+# The manager analyses its own logs; the Wazuh agent is not installed on the
+# manager itself.
+hardening_siem_type: none
+
+# Wazuh ports: 443 dashboard, 1514 agent events, 1515 agent enrolment.
+# Add "55000/tcp" only if the API must be reached from other hosts.
+# The vulnerability dashboard port (8443) is opened by the vulnmgmt role.
+hardening_firewall_allowed_ports: ["443/tcp", "1514/tcp", "1515/tcp"]

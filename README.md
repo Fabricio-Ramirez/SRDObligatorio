@@ -7,6 +7,11 @@ Este repositorio implementa el punto **1. "Plantilla de servidor endurecida"** d
 estandarizado, automatizado (Ansible) y replicable en cada despliegue para endurecer el sistema operativo
 GNU/Linux base de la infraestructura, tomando como referencia **CIS Benchmark Nivel 1**.
 
+También incluye el punto **5. "Gestión de Vulnerabilidades"**: una plataforma que se instala sólo en el servidor
+Wazuh (`sudo ./bootstrap.sh --component vulnmgmt`), con panel web propio, priorización CVSS + EPSS + CISA KEV,
+IA local (Ollama) y flujos no-code (n8n). Ver [14. Gestión de vulnerabilidades](#14-gestión-de-vulnerabilidades-punto-5)
+y la documentación completa en [`docs/vulnmgmt.md`](docs/vulnmgmt.md).
+
 ## Índice
 
 1. [Alcance y referencia](#1-alcance-y-referencia)
@@ -23,6 +28,7 @@ GNU/Linux base de la infraestructura, tomando como referencia **CIS Benchmark Ni
 11. [Pruebas realizadas y limitaciones](#11-pruebas-realizadas-y-limitaciones)
 12. [Uso de IA generativa](#12-uso-de-ia-generativa)
 13. [Referencias](#13-referencias)
+14. [Gestión de vulnerabilidades (punto 5)](#14-gestión-de-vulnerabilidades-punto-5)
 
 ---
 
@@ -161,7 +167,7 @@ Opciones de `bootstrap.sh` (ver `./bootstrap.sh --help`):
 
 Todas las variables, con su referencia CIS, están documentadas en `roles/hardening/defaults/main.yml`.
 Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor en `host_vars/<servidor>.yml`
-(ver el ejemplo `host_vars/srv-bastion.yml.example`).
+(ver los ejemplos `host_vars/srv-bastion.yml.example` y `host_vars/srv-siem.yml.example` para el servidor Wazuh).
 
 | Variable | Defecto | Uso |
 |---|---|---|
@@ -173,7 +179,8 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
 | `hardening_ssh_password_authentication` | `false` | `true` para permitir contraseñas por SSH (por ejemplo, mientras no hay claves cargadas). |
 | `hardening_ssh_disable_forwarding` | `true` | Poner `false` **sólo en el bastión / jump server** (necesita `ssh -J`). |
 | `hardening_firewall_allowed_services` / `_ports` | `[ssh]` / `[]` | Servicios/puertos según el rol del servidor (p. ej. `["443/tcp"]`, Wazuh manager `["1514/tcp","1515/tcp","55000/tcp"]`). |
-| `hardening_packages_absent` | lista CIS 2.1/2.2 | Paquetes que se desinstalan. **Un servidor web debe quitar `httpd`/`nginx` de la lista.** |
+| `hardening_packages_absent` | lista CIS 2.1/2.2 | Paquetes que se desinstalan. |
+| `hardening_packages_keep` | `[]` | Paquetes de la lista anterior que **este** servidor necesita (excepción documentada), p. ej. `[nginx]` en un servidor web o en el servidor Wazuh (panel de vulnerabilidades). |
 | `hardening_ip_forwarding` | `false` | `true` sólo en routers, gateways VPN o hosts de contenedores. |
 | `hardening_grub_password_pbkdf2` | `""` | Hash de `grub2-mkpasswd-pbkdf2` (CIS 1.4.1); guardarlo con `ansible-vault`. |
 | `hardening_audit_immutable` | `true` | Reglas de auditoría inmutables (CIS 6.3.3.20): cambiarlas requiere reiniciar. |
@@ -193,6 +200,7 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
 │   └── hosts.ini.example        # Ejecución remota desde un nodo de control
 ├── group_vars/all.yml           # Parámetros del sitio (SIEM, redes de administración, NTP)
 ├── host_vars/srv-bastion.yml.example
+├── host_vars/srv-siem.yml.example  # Excepciones del servidor Wazuh (conserva nginx)
 ├── scripts/verify.sh            # Evidencia post-endurecimiento (+ escaneo OpenSCAP opcional)
 └── roles/hardening/
     ├── defaults/main.yml        # Todas las variables, comentadas con su ID CIS
@@ -221,6 +229,8 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
         ├── aide.yml             # CIS 6.1 (se ejecuta al final)
         └── summary.yml          # Reporte: reinicio pendiente y puntos a revisar
     roles/hardening_rocky10/     # Misma estructura, adaptada a CIS RHEL 10 v1.0.1
+
+vulnmgmt.yml, roles/vulnmgmt/, vulnmgmt/, docs/vulnmgmt.md   # Punto 5 (ver sección 14)
 ```
 
 ## 7. Controles CIS implementados
@@ -303,7 +313,7 @@ Cada tarea lleva el ID de **CIS RHEL 10 v1.0.1**, que cambia la numeración resp
 | Cambié reglas de auditoría y no se aplican | Con `-e 2` el kernel las bloquea hasta reiniciar (el resumen lo indica). |
 | Falla la instalación del agente Wazuh | Verificar acceso a `packages.wazuh.com` y que `hardening_wazuh_agent_version` no sea mayor que la del manager. |
 | Docker/VPN dejan de enrutar | `hardening_ip_forwarding: true` en ese host. |
-| Un servicio web desapareció | Quitar `httpd`/`nginx` de `hardening_packages_absent` para ese servidor. |
+| Un servicio web desapareció | Agregar `httpd`/`nginx` a `hardening_packages_keep` en `host_vars` de ese servidor. |
 
 ## 11. Pruebas realizadas y limitaciones
 
@@ -346,3 +356,25 @@ Según las pautas del obligatorio:
 - Red Hat — *Security hardening*, Red Hat Enterprise Linux 9: <https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/security_hardening/index>
 - Wazuh — documentación oficial (instalación y enrolamiento de agentes): <https://documentation.wazuh.com/current/>
 - Ansible — colección `ansible.posix`: <https://github.com/ansible-collections/ansible.posix>
+- FIRST — EPSS (*Exploit Prediction Scoring System*): <https://www.first.org/epss/>
+- CISA — *Known Exploited Vulnerabilities Catalog*: <https://www.cisa.gov/known-exploited-vulnerabilities-catalog>
+- Wazuh — detección de vulnerabilidades: <https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html>
+- Ollama: <https://github.com/ollama/ollama> · n8n Community Edition: <https://github.com/n8n-io/n8n>
+
+## 14. Gestión de vulnerabilidades (punto 5)
+
+Plataforma instalada **sólo en el servidor Wazuh** y alojada en él. Documentación completa: [`docs/vulnmgmt.md`](docs/vulnmgmt.md).
+
+```bash
+sudo ./bootstrap.sh --component vulnmgmt
+```
+
+| Requisito | Cómo se cumple |
+|---|---|
+| Gestionar vulnerabilidades y actualizaciones | Lee los hallazgos de todos los agentes desde el indexer de Wazuh (≥ 4.8) y genera una acción por paquete: actualizar (con el comando exacto y aviso de reinicio), mitigar o revisar. |
+| Informes periódicos | Temporizador diario (03:30): panel web HTTPS en `https://<servidor-wazuh>:8443`, CSV, histórico y alertas en Wazuh (reglas 100800-100808). |
+| Acciones priorizadas y viables | Riesgo con CVSS + EPSS + CISA KEV + criticidad del servidor; prioridad P1-P4 con plazo (SLA), seguimiento de vencidas, escaladas y resueltas. |
+| IA (valor agregado) | Modelo local y gratuito (Ollama + Qwen2.5 1.5B/0.5B) que redacta el resumen ejecutivo y notas, limitado en CPU/RAM y con respaldo por reglas. |
+| No-code (valor agregado) | n8n Community Edition con un flujo semanal que avisa a infraestructura las acciones P1/P2. |
+
+Antes de endurecer el servidor Wazuh, copiar `host_vars/srv-siem.yml.example` (conserva `nginx`, que CIS 2.1.18 desinstalaría).

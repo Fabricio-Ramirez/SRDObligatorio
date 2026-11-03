@@ -1,0 +1,191 @@
+{
+  "name": "Gestión de vulnerabilidades - aviso semanal de acciones P1/P2",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Gestión de vulnerabilidades\nCada lunes 08:00 lee el último informe del motor (panel web en el propio servidor Wazuh), filtra las acciones P1 y P2 y arma el aviso para el equipo de infraestructura.\n\n**Para activar el envío:** abrir el nodo *Enviar correo*, cargar la credencial SMTP de la organización, completar remitente/destinatario y quitar *Deactivate*. Luego publicar el workflow.",
+        "height": 260,
+        "width": 420
+      },
+      "id": "6d8f1c0e-1a2b-4c3d-8e9f-000000000001",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-120, -320]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [1],
+              "triggerAtHour": 8,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "6d8f1c0e-1a2b-4c3d-8e9f-000000000002",
+      "name": "Cada lunes 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {},
+      "id": "6d8f1c0e-1a2b-4c3d-8e9f-000000000003",
+      "name": "Ejecución manual",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://127.0.0.1:8443/data/latest.json",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "6d8f1c0e-1a2b-4c3d-8e9f-000000000004",
+      "name": "Leer informe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 100]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "actionables",
+        "options": {}
+      },
+      "id": "6d8f1c0e-1a2b-4c3d-8e9f-000000000005",
+      "name": "Separar acciones",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [480, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1a1b2c3-0000-4000-8000-000000000001",
+              "leftValue": "={{ $json.priority }}",
+              "rightValue": "P1",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "c1a1b2c3-0000-4000-8000-000000000002",
+              "leftValue": "={{ $json.priority }}",
+              "rightValue": "P2",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "6d8f1c0e-1a2b-4c3d-8e9f-000000000006",
+      "name": "Sólo P1 y P2",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [720, 100]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "acciones",
+        "options": {}
+      },
+      "id": "6d8f1c0e-1a2b-4c3d-8e9f-000000000007",
+      "name": "Agrupar",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [960, 100]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a5a5a5a5-0000-4000-8000-000000000001",
+              "name": "asunto",
+              "value": "=[Vulnerabilidades] {{ $json.acciones.filter(a => a.priority === 'P1').length }} acciones P1 y {{ $json.acciones.filter(a => a.priority === 'P2').length }} P2 pendientes",
+              "type": "string"
+            },
+            {
+              "id": "a5a5a5a5-0000-4000-8000-000000000002",
+              "name": "cuerpo",
+              "value": "=Acciones de remediación priorizadas (informe del {{ $('Leer informe').item.json.generated_at }}):\n\n{{ $json.acciones.map(a => `${a.priority} | riesgo ${a.risk} | ${a.action} ${a.package}${a.fixed_version ? ' >= ' + a.fixed_version : ''}\\n   Servidores: ${a.hosts.map(h => h.name).join(', ')}\\n   CVE: ${a.cves.map(c => c.id).join(', ')}${a.kev_count ? ' (KEV)' : ''}\\n   Vence: ${a.due_date}${a.overdue ? ' (VENCIDA)' : ''}\\n   Comando: ${a.commands.remediation}`).join('\\n\\n') }}\n\nResumen: {{ $('Leer informe').item.json.ai.summary }}\n\nDetalle completo en el panel: https://<servidor-wazuh>:8443/",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6d8f1c0e-1a2b-4c3d-8e9f-000000000008",
+      "name": "Armar mensaje",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1200, 100]
+    },
+    {
+      "parameters": {
+        "fromEmail": "vulnmgmt@cdg.uy",
+        "toEmail": "infraestructura@cdg.uy",
+        "subject": "={{ $json.asunto }}",
+        "emailFormat": "text",
+        "text": "={{ $json.cuerpo }}",
+        "options": {}
+      },
+      "id": "6d8f1c0e-1a2b-4c3d-8e9f-000000000009",
+      "name": "Enviar correo",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1440, 100],
+      "disabled": true
+    }
+  ],
+  "connections": {
+    "Cada lunes 08:00": {
+      "main": [[{ "node": "Leer informe", "type": "main", "index": 0 }]]
+    },
+    "Ejecución manual": {
+      "main": [[{ "node": "Leer informe", "type": "main", "index": 0 }]]
+    },
+    "Leer informe": {
+      "main": [[{ "node": "Separar acciones", "type": "main", "index": 0 }]]
+    },
+    "Separar acciones": {
+      "main": [[{ "node": "Sólo P1 y P2", "type": "main", "index": 0 }]]
+    },
+    "Sólo P1 y P2": {
+      "main": [[{ "node": "Agrupar", "type": "main", "index": 0 }]]
+    },
+    "Agrupar": {
+      "main": [[{ "node": "Armar mensaje", "type": "main", "index": 0 }]]
+    },
+    "Armar mensaje": {
+      "main": [[{ "node": "Enviar correo", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "id": "vulnmgmtWeekly01"
+}

@@ -1,0 +1,101 @@
+---
+- name: Base | Install the required packages
+  ansible.builtin.dnf:
+    name: "{{ ['python3', 'nginx', 'openssl', 'tar', 'zstd', 'logrotate'] + (['podman'] if vulnmgmt_n8n_enabled | bool else []) }}"
+    state: present
+
+- name: Base | Create the vulnmgmt service account
+  ansible.builtin.user:
+    name: vulnmgmt
+    system: true
+    shell: /sbin/nologin
+    home: /var/lib/vulnmgmt
+    create_home: false
+
+- name: Base | Create the directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /opt/vulnmgmt, owner: root, group: root, mode: "0755"}
+    - {path: /opt/vulnmgmt/engine, owner: root, group: root, mode: "0755"}
+    - {path: /etc/vulnmgmt, owner: root, group: vulnmgmt, mode: "0750"}
+    - {path: /var/lib/vulnmgmt, owner: vulnmgmt, group: vulnmgmt, mode: "0750"}
+    - {path: /var/lib/vulnmgmt/intel, owner: vulnmgmt, group: vulnmgmt, mode: "0750"}
+    - {path: /var/log/vulnmgmt, owner: vulnmgmt, group: vulnmgmt, mode: "0750"}
+    - {path: /var/www/vulnmgmt, owner: root, group: root, mode: "0755"}
+    - {path: /var/www/vulnmgmt/data, owner: vulnmgmt, group: vulnmgmt, mode: "0755"}
+    - {path: /var/cache/vulnmgmt, owner: root, group: root, mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Base | Install the engine
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/vulnmgmt/engine/vulnmgmt/"
+    dest: /opt/vulnmgmt/engine/vulnmgmt/
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Base | Install the dashboard
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/vulnmgmt/web/{{ item }}"
+    dest: "/var/www/vulnmgmt/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [index.html, app.js, style.css]
+
+# --- TLS certificate for the dashboard (self-signed, includes 127.0.0.1) -------
+- name: Base | Create the dashboard TLS certificate
+  ansible.builtin.command: >-
+    openssl req -x509 -newkey rsa:3072 -sha256 -days 825 -nodes
+    -keyout /etc/pki/tls/private/vulnmgmt.key -out /etc/pki/tls/certs/vulnmgmt.crt
+    -subj "/CN={{ ansible_facts['fqdn'] }}" -addext "subjectAltName={{ _san | join(',') }}"
+  vars:
+    _san: >-
+      {{ ['IP:127.0.0.1', 'DNS:localhost', 'DNS:' ~ ansible_facts['fqdn']]
+         + (['IP:' ~ ansible_facts['default_ipv4']['address']] if ansible_facts['default_ipv4']['address'] is defined else []) }}
+  args:
+    creates: /etc/pki/tls/certs/vulnmgmt.crt
+  notify: Reload nginx
+
+- name: Base | Protect the TLS private key
+  ansible.builtin.file:
+    path: /etc/pki/tls/private/vulnmgmt.key
+    owner: root
+    group: root
+    mode: "0600"
+
+# --- Secrets: generated once on the server, never in the repository -----------
+- name: Base | Generate the secrets that were not provided
+  ansible.builtin.shell: |
+    umask 077
+    python3 -c 'import secrets; print(secrets.token_urlsafe(18) + "Aa1.")' > {{ item }}
+  args:
+    creates: "{{ item }}"
+  loop:
+    - /etc/vulnmgmt/web.secret
+    - /etc/vulnmgmt/web.salt
+    - /etc/vulnmgmt/indexer.secret
+  no_log: true
+
+- name: Base | Read the secrets
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  loop: [/etc/vulnmgmt/web.secret, /etc/vulnmgmt/web.salt, /etc/vulnmgmt/indexer.secret]
+  register: vulnmgmt_secrets
+  no_log: true
+
+- name: Base | Keep the secrets in memory
+  ansible.builtin.set_fact:
+    vulnmgmt_web_secret: >-
+      {{ vulnmgmt_web_password if vulnmgmt_web_password | length > 0
+         else vulnmgmt_secrets.results[0].content | b64decode | trim }}
+    vulnmgmt_web_salt: "{{ (vulnmgmt_secrets.results[1].content | b64decode | trim | regex_replace('[^A-Za-z0-9]', ''))[:16] }}"
+    vulnmgmt_reader_password: "{{ vulnmgmt_secrets.results[2].content | b64decode | trim }}"
+  no_log: true

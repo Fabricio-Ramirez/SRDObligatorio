@@ -1,0 +1,31 @@
+# {{ vulnmgmt_managed_comment }}
+[Unit]
+Description=Vulnerability management engine (Wazuh + KEV/EPSS + local AI)
+After=network-online.target wazuh-indexer.service ollama.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=vulnmgmt
+Group=vulnmgmt
+WorkingDirectory=/opt/vulnmgmt/engine
+ExecStart=/usr/bin/python3 -m vulnmgmt run --config /etc/vulnmgmt/config.json
+# Low priority: the Wazuh services always come first on a small VM.
+Nice=10
+IOSchedulingClass=idle
+CPUQuota={{ vulnmgmt_engine_cpu_quota }}
+MemoryMax={{ vulnmgmt_engine_memory_max }}
+# Sandbox
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/var/www/vulnmgmt/data /var/lib/vulnmgmt /var/log/vulnmgmt

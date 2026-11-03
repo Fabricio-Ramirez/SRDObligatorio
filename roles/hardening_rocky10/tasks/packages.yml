@@ -31,7 +31,7 @@
 
 - name: CIS 2.1 / 2.2 | Ensure unneeded server services and clients are not installed
   ansible.builtin.dnf:
-    name: "{{ hardening_packages_absent }}"
+    name: "{{ hardening_packages_absent | difference(hardening_packages_keep) }}"
     state: absent
 
 - name: CIS 1.2.2.1 | Ensure dnf-automatic is installed

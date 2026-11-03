@@ -1,3 +1,5 @@
 collections/
 .ansible/
 *.retry
+__pycache__/
+*.pyc

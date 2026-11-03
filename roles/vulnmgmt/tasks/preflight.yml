@@ -1,0 +1,48 @@
+---
+- name: Preflight | Check the operating system
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Rocky'
+      - ansible_facts['distribution_major_version'] in vulnmgmt_supported_major_versions
+    fail_msg: "vulnmgmt targets Rocky Linux {{ vulnmgmt_supported_major_versions | join('/') }}."
+    quiet: true
+
+- name: Preflight | Look for the Wazuh manager
+  ansible.builtin.stat:
+    path: /var/ossec/bin/wazuh-control
+  register: vulnmgmt_wazuh_control
+
+- name: Preflight | Abort if this is not the Wazuh server
+  ansible.builtin.assert:
+    that: vulnmgmt_wazuh_control.stat.exists
+    fail_msg: >-
+      This playbook must run on the Wazuh server (manager + indexer). /var/ossec/bin/wazuh-control was not found.
+    quiet: true
+
+- name: Preflight | Look for an existing reader secret
+  ansible.builtin.stat:
+    path: /etc/vulnmgmt/indexer.secret
+  register: vulnmgmt_reader_secret
+
+- name: Preflight | Check the indexer credentials
+  ansible.builtin.assert:
+    that: >-
+      (vulnmgmt_indexer_create_reader | bool and
+       (vulnmgmt_indexer_admin_password | length > 0 or vulnmgmt_reader_secret.stat.exists))
+      or (not (vulnmgmt_indexer_create_reader | bool) and vulnmgmt_indexer_password | length > 0)
+    fail_msg: >-
+      Indexer credentials are missing. Pass the indexer admin password once
+      (-e vulnmgmt_indexer_admin_password=... ; it is in wazuh-passwords.txt inside
+      wazuh-install-files.tar) so the role can create the read-only user, or set
+      vulnmgmt_indexer_create_reader=false with vulnmgmt_indexer_user/password.
+    quiet: true
+
+- name: Preflight | Report a VM that is small for the local AI
+  ansible.builtin.debug:
+    msg: >-
+      This server has {{ ansible_facts['memtotal_mb'] }} MB of RAM. Wazuh all-in-one needs about 8 GB;
+      the local AI adds 1-2 GB while it runs. The engine skips the AI automatically when there is not
+      enough free memory, or disable it with -e vulnmgmt_ai_enabled=false.
+  when:
+    - vulnmgmt_ai_enabled | bool
+    - ansible_facts['memtotal_mb'] < 9000

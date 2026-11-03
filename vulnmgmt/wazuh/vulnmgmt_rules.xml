@@ -1,0 +1,73 @@
+<!--
+  Vulnerability management (SRD assignment, item 5) - custom rules.
+  Events are JSON lines written by the vulnmgmt engine to
+  /var/log/vulnmgmt/events.json and read by the manager (log_format json).
+  IDs 100800-100808 (custom rule range).
+-->
+<group name="vulnmgmt,vulnerability_management,">
+
+  <rule id="100800" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="vulnmgmt.event" type="pcre2">^(summary|actionable)$</field>
+    <description>VulnMgmt: evento del motor de gestión de vulnerabilidades.</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100801" level="3">
+    <if_sid>100800</if_sid>
+    <field name="vulnmgmt.event">^summary$</field>
+    <description>VulnMgmt: informe generado - $(vulnmgmt.unique_cves) CVE, P1=$(vulnmgmt.p1), P2=$(vulnmgmt.p2), vencidas=$(vulnmgmt.overdue).</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100802" level="5">
+    <if_sid>100800</if_sid>
+    <field name="vulnmgmt.event">^actionable$</field>
+    <description>VulnMgmt: acción $(vulnmgmt.priority) $(vulnmgmt.status) - $(vulnmgmt.action) $(vulnmgmt.package) en $(vulnmgmt.hosts).</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100803" level="10">
+    <if_sid>100802</if_sid>
+    <field name="vulnmgmt.priority">^P2$</field>
+    <description>VulnMgmt: acción P2 ($(vulnmgmt.status)) - $(vulnmgmt.action) $(vulnmgmt.package) en $(vulnmgmt.hosts), vence $(vulnmgmt.due_date).</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100804" level="12">
+    <if_sid>100802</if_sid>
+    <field name="vulnmgmt.priority">^P1$</field>
+    <description>VulnMgmt: acción P1 ($(vulnmgmt.status)) - $(vulnmgmt.action) $(vulnmgmt.package) en $(vulnmgmt.hosts) ($(vulnmgmt.cves)), vence $(vulnmgmt.due_date).</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100805" level="13">
+    <if_sid>100804</if_sid>
+    <field name="vulnmgmt.kev">^true$</field>
+    <description>VulnMgmt: acción P1 con vulnerabilidad explotada activamente (CISA KEV) - $(vulnmgmt.package) en $(vulnmgmt.hosts).</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100806" level="12">
+    <if_sid>100803</if_sid>
+    <field name="vulnmgmt.status">^overdue$</field>
+    <description>VulnMgmt: acción P2 VENCIDA - $(vulnmgmt.package) en $(vulnmgmt.hosts), plazo $(vulnmgmt.due_date).</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100807" level="13">
+    <if_sid>100804</if_sid>
+    <field name="vulnmgmt.status">^overdue$</field>
+    <description>VulnMgmt: acción P1 VENCIDA - $(vulnmgmt.package) en $(vulnmgmt.hosts), plazo $(vulnmgmt.due_date).</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <!-- KEV + overdue: 100805 is evaluated before 100807, so it needs its own child. -->
+  <rule id="100808" level="14">
+    <if_sid>100805</if_sid>
+    <field name="vulnmgmt.status">^overdue$</field>
+    <description>VulnMgmt: acción P1 VENCIDA con vulnerabilidad explotada activamente (CISA KEV) - $(vulnmgmt.package) en $(vulnmgmt.hosts), plazo $(vulnmgmt.due_date).</description>
+    <options>no_full_log</options>
+  </rule>
+
+</group>

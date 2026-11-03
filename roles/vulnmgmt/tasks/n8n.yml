@@ -1,0 +1,73 @@
+---
+# n8n runs as uid 1000 ("node") inside the container.
+- name: n8n | Create the data, import and certificate directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /var/lib/n8n, owner: "1000", mode: "0700"}
+    - {path: /var/lib/n8n/import, owner: "1000", mode: "0700"}
+    - {path: /etc/vulnmgmt/n8n-ca, owner: root, mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+
+# The workflow reads the dashboard over HTTPS; n8n trusts its self-signed
+# certificate through NODE_EXTRA_CA_CERTS.
+- name: n8n | Provide the dashboard certificate to n8n
+  ansible.builtin.copy:
+    src: /etc/pki/tls/certs/vulnmgmt.crt
+    dest: /etc/vulnmgmt/n8n-ca/vulnmgmt.crt
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart n8n
+
+- name: n8n | Copy the workflow to import
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/vulnmgmt/n8n/vulnmgmt-workflow.json"
+    dest: /var/lib/n8n/import/vulnmgmt-workflow.json
+    owner: "1000"
+    group: "1000"
+    mode: "0600"
+
+- name: n8n | Install the container (Podman Quadlet)
+  ansible.builtin.template:
+    src: n8n.container.j2
+    dest: /etc/containers/systemd/n8n.container
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart n8n
+
+# Quadlet generates n8n.service at daemon-reload; it is started from its
+# [Install] section and cannot be "enabled" with systemctl.
+- name: n8n | Ensure n8n is running
+  ansible.builtin.systemd:
+    name: n8n
+    state: started
+    daemon_reload: true
+
+- name: n8n | Wait for n8n
+  ansible.builtin.uri:
+    url: http://127.0.0.1:5678/healthz
+  register: vulnmgmt_n8n_health
+  retries: 30
+  delay: 10
+  until: vulnmgmt_n8n_health.status == 200
+
+- name: n8n | Import the vulnerability workflow (once)
+  ansible.builtin.command: podman exec n8n n8n import:workflow --input=/home/node/.n8n/import/vulnmgmt-workflow.json
+  args:
+    creates: /var/lib/n8n/import/.imported
+
+- name: n8n | Remember that the workflow was imported
+  ansible.builtin.copy:
+    dest: /var/lib/n8n/import/.imported
+    content: "imported\n"
+    owner: "1000"
+    group: "1000"
+    mode: "0600"

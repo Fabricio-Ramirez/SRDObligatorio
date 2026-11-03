@@ -92,6 +92,11 @@ hardening_packages_absent:
   - setroubleshoot   # 1.3.1.8
   - abrt             # [extra] automatic crash reporting
 
+# Packages from the list above that THIS server needs (documented exception),
+# without copying the whole list into host_vars. E.g. the Wazuh server keeps
+# nginx for the vulnerability dashboard: hardening_packages_keep: [nginx]
+hardening_packages_keep: []
+
 # -----------------------------------------------------------------------------
 # 1.1 Filesystem
 # -----------------------------------------------------------------------------

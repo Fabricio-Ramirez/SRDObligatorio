@@ -1,0 +1,33 @@
+# {{ vulnmgmt_managed_comment }}
+# n8n Community Edition (free, self-hosted) for the no-code workflows.
+# Listens only on 127.0.0.1:5678: open it through an SSH tunnel
+#   ssh -L 5678:127.0.0.1:5678 <admin>@<wazuh-server>
+[Unit]
+Description=n8n - no-code workflows for vulnerability management
+After=network-online.target nginx.service
+
+[Container]
+Image={{ vulnmgmt_n8n_image }}
+ContainerName=n8n
+Network=host
+Volume=/var/lib/n8n:/home/node/.n8n:Z
+Volume=/etc/vulnmgmt/n8n-ca:/certs:ro,Z
+Environment=N8N_LISTEN_ADDRESS=127.0.0.1
+Environment=N8N_HOST=localhost
+Environment=N8N_PORT=5678
+Environment=N8N_DIAGNOSTICS_ENABLED=false
+Environment=N8N_VERSION_NOTIFICATIONS_ENABLED=false
+Environment=N8N_TEMPLATES_ENABLED=false
+Environment=GENERIC_TIMEZONE={{ vulnmgmt_n8n_timezone }}
+Environment=TZ={{ vulnmgmt_n8n_timezone }}
+Environment=NODE_EXTRA_CA_CERTS=/certs/vulnmgmt.crt
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+Restart=on-failure
+MemoryMax={{ vulnmgmt_n8n_memory_max }}
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

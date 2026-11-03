@@ -1,0 +1,11 @@
+# {{ vulnmgmt_managed_comment }}
+[Unit]
+Description=Periodic vulnerability report
+
+[Timer]
+OnCalendar={{ vulnmgmt_schedule }}
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

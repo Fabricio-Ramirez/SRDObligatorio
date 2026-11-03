@@ -1,0 +1,49 @@
+---
+- name: Schedule | Install the engine service and timer
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: [vulnmgmt.service, vulnmgmt.timer]
+
+- name: Schedule | Enable the periodic report
+  ansible.builtin.systemd:
+    name: vulnmgmt.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Schedule | Publish the demonstration report
+  ansible.builtin.command: runuser -u vulnmgmt -- python3 -m vulnmgmt demo --config /etc/vulnmgmt/config.json
+  args:
+    chdir: /opt/vulnmgmt/engine
+  changed_when: true
+  when: vulnmgmt_first_run == 'demo'
+
+# systemctl directly: its return code tells whether the oneshot run succeeded.
+- name: Schedule | Generate the first real report  # noqa: command-instead-of-module
+  ansible.builtin.command: systemctl start vulnmgmt.service
+  register: vulnmgmt_first
+  changed_when: true
+  failed_when: false
+  when: vulnmgmt_first_run == 'run'
+
+- name: Schedule | Report a failed first run
+  ansible.builtin.debug:
+    msg: "The first report failed: check 'journalctl -u vulnmgmt.service'. The timer will retry at {{ vulnmgmt_schedule }}."
+  when:
+    - vulnmgmt_first_run == 'run'
+    - vulnmgmt_first.rc | default(0) != 0
+
+- name: Schedule | How to use the platform
+  ansible.builtin.debug:
+    msg:
+      - >-
+        Panel: https://{{ ansible_facts['default_ipv4']['address'] | default(ansible_facts['fqdn']) }}:{{ vulnmgmt_web_port }}/
+        (usuario '{{ vulnmgmt_web_user }}', contraseña en /etc/vulnmgmt/web.secret)
+      - "Ejecutar un informe ahora: systemctl start vulnmgmt.service  |  Logs: journalctl -u vulnmgmt.service"
+      - >-
+        {{ 'n8n: ssh -L 5678:127.0.0.1:5678 <admin>@<este-servidor> y abrir http://localhost:5678
+        (crear la cuenta de propietario la primera vez)' if vulnmgmt_n8n_enabled | bool else 'n8n deshabilitado' }}

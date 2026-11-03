@@ -1,0 +1,36 @@
+# {{ vulnmgmt_managed_comment }}
+# Ollama tuned for a small VM shared with Wazuh: loopback only, one model,
+# one request at a time, model unloaded right after each answer, quantised
+# KV cache, and hard CPU/RAM limits.
+[Unit]
+Description=Ollama (local LLM for the vulnerability reports)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama serve
+User=ollama
+Group=ollama
+Environment=HOME=/usr/share/ollama
+Environment=OLLAMA_HOST=127.0.0.1:11434
+Environment=OLLAMA_KEEP_ALIVE=0
+Environment=OLLAMA_NUM_PARALLEL=1
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_MAX_QUEUE=4
+Environment=OLLAMA_CONTEXT_LENGTH={{ vulnmgmt_ai_num_ctx }}
+Environment=OLLAMA_FLASH_ATTENTION=1
+Environment=OLLAMA_KV_CACHE_TYPE=q8_0
+Restart=on-failure
+RestartSec=5
+Nice=10
+IOSchedulingClass=idle
+CPUQuota={{ vulnmgmt_ollama_cpu_quota }}
+MemoryHigh={{ vulnmgmt_ollama_memory_max }}
+MemoryMax={{ vulnmgmt_ollama_memory_max }}
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/usr/share/ollama
+
+[Install]
+WantedBy=multi-user.target

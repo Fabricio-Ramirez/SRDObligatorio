@@ -11,3 +11,10 @@ srv-bastion  ansible_host=10.0.10.10
 [rocky_servers:vars]
 ansible_user=admin
 ansible_python_interpreter=/usr/bin/python3
+
+[wazuh_server]
+srv-siem     ansible_host=10.0.10.12
+
+[wazuh_server:vars]
+ansible_user=admin
+ansible_python_interpreter=/usr/bin/python3

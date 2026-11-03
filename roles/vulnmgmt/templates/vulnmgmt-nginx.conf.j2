@@ -1,0 +1,48 @@
+# {{ vulnmgmt_managed_comment }}
+# Vulnerability dashboard: HTTPS + basic authentication. Requests from the
+# server itself (n8n workflow) are allowed without password.
+server {
+    listen {{ vulnmgmt_web_port }} ssl;
+{% if vulnmgmt_ipv6_proc.stat.exists | default(false) %}
+    listen [::]:{{ vulnmgmt_web_port }} ssl;
+{% endif %}
+    server_name {{ vulnmgmt_web_server_names | join(' ') }};
+
+    ssl_certificate     /etc/pki/tls/certs/vulnmgmt.crt;
+    ssl_certificate_key /etc/pki/tls/private/vulnmgmt.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;   # ciphers come from the system crypto policy
+    ssl_session_cache shared:vulnmgmt:1m;
+
+    root /var/www/vulnmgmt;
+    index index.html;
+
+    # Read-only site. "return" is used instead of "deny"/"limit_except" because
+    # with "satisfy any" a valid password would override any "deny" rule.
+    if ($request_method !~ ^(GET|HEAD)$) { return 405; }
+    location ~ /\. { return 404; }
+
+    satisfy any;
+    allow 127.0.0.1;
+    allow ::1;
+    deny all;
+    auth_basic "Gestion de vulnerabilidades";
+    auth_basic_user_file /etc/nginx/vulnmgmt.htpasswd;
+
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Frame-Options DENY always;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location /data/ {
+        add_header Cache-Control "no-store" always;
+        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
+        add_header X-Content-Type-Options nosniff always;
+        try_files $uri =404;
+    }
+}
