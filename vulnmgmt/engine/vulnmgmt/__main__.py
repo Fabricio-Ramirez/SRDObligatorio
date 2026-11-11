@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import __version__, ai, demo, intel, prioritize, publish, wazuh
+from . import __version__, ai, demo, intel, prioritize, publish, remediation, wazuh
 from .httpclient import HTTPError
 
 log = logging.getLogger("vulnmgmt")
@@ -60,6 +60,7 @@ def run(cfg, use_demo=False):
         "actionables": actionables,
         "hosts": hosts,
         "ai": ai_section,
+        "remediation": remediation.build(actionables),
         "intel": {"kev": status["kev"], "epss": status["epss"]},
         "scoring": prioritize.merge_scoring(cfg.get("scoring")),
         "warnings": status["warnings"],

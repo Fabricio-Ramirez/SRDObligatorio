@@ -109,8 +109,32 @@ def priority_for(risk, kev, scoring):
     return "P4"
 
 
+# Wazuh's own components (agent, manager, indexer, dashboard) are never upgraded
+# automatically: the agent must not be newer than the manager (hardening rule).
+PROTECTED_PACKAGES = re.compile(r"^wazuh([-_].*)?$")
+PROTECTED_HINT = ("Componente de Wazuh: no se actualiza automáticamente. Actualizar primero el manager y el indexer "
+                  "y después los agentes, siguiendo la guía oficial de actualización de Wazuh (el agente no puede "
+                  "ser más nuevo que el manager).")
+
+
+# Package names, versions and CVE ids come from the indexer, so anything that is interpolated into a
+# command (shown with a Copy button and exported to the CSV) must look like a real one first.
+SAFE_PACKAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._-]*$")
+SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._:~^-]*$")
+CVE_ID = re.compile(r"^CVE-\d{4}-\d{4,}$")
+UNSAFE_HINT = ("Nombre de paquete no estándar: no se genera un comando automático. "
+               "Revisar manualmente qué paquete es y actualizarlo con el gestor del sistema.")
+
+
 def commands_for(package, pkg_type, fixed_version):
     """Remediation and verification commands for the package manager in use."""
+    if not SAFE_PACKAGE.match(package or ""):
+        return {"remediation": UNSAFE_HINT, "verification": "Comprobar manualmente la versión instalada"}
+    if fixed_version and not SAFE_VERSION.match(fixed_version):
+        fixed_version = None                     # keep the command, drop the unverifiable constraint
+    if PROTECTED_PACKAGES.match(package or ""):
+        return {"remediation": PROTECTED_HINT, "verification": f"rpm -q {package}" if pkg_type == "rpm"
+                else f"Comprobar la versión instalada de {package}"}
     if pkg_type == "rpm":
         return {"remediation": f"sudo dnf upgrade -y {package}",
                 "verification": f"rpm -q {package}" + (f"  # esperado >= {fixed_version}" if fixed_version else "")}
@@ -259,8 +283,9 @@ def analyse(findings, kev, epss, agents, scoring_cfg, state, today=None):
                 "remediation": "Sin versión corregida conocida: aplicar mitigaciones (deshabilitar el "
                                "servicio o módulo afectado, restringir acceso con firewall, monitorear) "
                                "y revisar el aviso del proveedor.",
-                "verification": f"dnf updateinfo list --cve {top['id']}" if pkg_type == "rpm" else
-                                f"Revisar periódicamente el aviso de {top['id']}"},
+                "verification": (f"dnf updateinfo list --cve {top['id']}" if pkg_type == "rpm" else
+                                 f"Revisar periódicamente el aviso de {top['id']}") if CVE_ID.match(top["id"])
+                else "Revisar periódicamente el aviso del proveedor"},
             "first_seen": first_seen,
             "previous_priority": previous_priority,
             "due_date": due.isoformat(),

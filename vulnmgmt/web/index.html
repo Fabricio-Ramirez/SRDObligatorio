@@ -74,6 +74,33 @@
       <p class="empty" id="actions-empty" hidden>No hay acciones que coincidan con los filtros.</p>
     </section>
 
+    <section class="card" id="remediation" hidden>
+      <div class="card-head">
+        <h2>Plan de remediación</h2>
+        <div class="downloads"><a id="rem-playbook" href="data/remediation.yml" download>Descargar playbook (remediation.yml)</a></div>
+      </div>
+      <p class="note">Esta plataforma no modifica los servidores: genera los comandos y un playbook de Ansible para
+        ejecutar desde el bastión o el nodo de control, que ya tienen las claves SSH. Ningún paso reinicia el servidor.
+        Los componentes de Wazuh y las acciones sin parche quedan como trabajo manual.</p>
+      <h3>Con Ansible (recomendado)</h3>
+      <div id="rem-ansible"></div>
+      <h3>Comandos por servidor (ejecutar en cada servidor)</h3>
+      <div class="table-wrap">
+        <table id="rem-hosts">
+          <thead><tr>
+            <th scope="col">Servidor</th><th scope="col">Sistema</th><th scope="col">Paquetes</th>
+            <th scope="col">Comandos</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="empty" id="rem-empty" hidden>No hay actualizaciones automatizables en este informe.</p>
+      <details id="rem-manual-box" hidden>
+        <summary id="rem-manual-title"></summary>
+        <ul id="rem-manual"></ul>
+      </details>
+    </section>
+
     <section class="card">
       <h2>Servidores</h2>
       <div class="table-wrap">

@@ -9,7 +9,7 @@ GNU/Linux base de la infraestructura, tomando como referencia **CIS Benchmark Ni
 
 También incluye el punto **5. "Gestión de Vulnerabilidades"**: una plataforma que se instala sólo en el servidor
 Wazuh (`sudo ./bootstrap.sh --component vulnmgmt`), con panel web propio, priorización CVSS + EPSS + CISA KEV,
-IA local (Ollama) y flujos no-code (n8n). Ver [14. Gestión de vulnerabilidades](#14-gestión-de-vulnerabilidades-punto-5)
+IA local (Ollama) y flujos no-code (n8n). Ver [12. Gestión de vulnerabilidades](#12-gestión-de-vulnerabilidades-punto-5)
 y la documentación completa en [`docs/vulnmgmt.md`](docs/vulnmgmt.md).
 
 ## Índice
@@ -26,9 +26,9 @@ y la documentación completa en [`docs/vulnmgmt.md`](docs/vulnmgmt.md).
 9. [Verificación](#9-verificación)
 10. [Resolución de problemas](#10-resolución-de-problemas)
 11. [Pruebas realizadas y limitaciones](#11-pruebas-realizadas-y-limitaciones)
-12. [Uso de IA generativa](#12-uso-de-ia-generativa)
-13. [Referencias](#13-referencias)
-14. [Gestión de vulnerabilidades (punto 5)](#14-gestión-de-vulnerabilidades-punto-5)
+12. [Gestión de vulnerabilidades (punto 5)](#12-gestión-de-vulnerabilidades-punto-5)
+13. [Uso de IA generativa](#13-uso-de-ia-generativa)
+14. [Referencias](#14-referencias)
 
 ---
 
@@ -230,7 +230,7 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
         └── summary.yml          # Reporte: reinicio pendiente y puntos a revisar
     roles/hardening_rocky10/     # Misma estructura, adaptada a CIS RHEL 10 v1.0.1
 
-vulnmgmt.yml, roles/vulnmgmt/, vulnmgmt/, docs/vulnmgmt.md   # Punto 5 (ver sección 14)
+vulnmgmt.yml, roles/vulnmgmt/, vulnmgmt/, docs/vulnmgmt.md   # Punto 5 (ver sección 12)
 ```
 
 ## 7. Controles CIS implementados
@@ -339,29 +339,7 @@ Wazuh). Ejecutar primero `--check`, luego la ejecución real, reiniciar y correr
 Para Rocky 10 además queda sin verificar: que el agente Wazuh 4.x tenga soporte oficial para EL10, y si CIS publicó
 un benchmark específico de Rocky Linux 10 (aquí se usa el de RHEL 10, que es binariamente compatible).
 
-## 12. Uso de IA generativa
-
-Según las pautas del obligatorio:
-
-- **Herramienta:** Claude Code (Anthropic).
-- **Contexto de uso:** generación del código Ansible y de los scripts, redacción de esta documentación y
-  contraste de los controles contra fuentes públicas (CIS vía ComplianceAsCode, código fuente de OpenSSH, audit,
-  authselect, rsyslog y dnf).
-- **Verificación:** el equipo debe revisar el contenido y validarlo en la maqueta (ver sección 11).
-
-## 13. Referencias
-
-- Center for Internet Security — CIS Benchmarks (Rocky Linux 9 / Red Hat Enterprise Linux 9, v2.0.0): <https://www.cisecurity.org/cis-benchmarks>
-- ComplianceAsCode — mapeo de controles CIS RHEL 9 y perfiles SCAP: <https://github.com/ComplianceAsCode/content>
-- Red Hat — *Security hardening*, Red Hat Enterprise Linux 9: <https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/security_hardening/index>
-- Wazuh — documentación oficial (instalación y enrolamiento de agentes): <https://documentation.wazuh.com/current/>
-- Ansible — colección `ansible.posix`: <https://github.com/ansible-collections/ansible.posix>
-- FIRST — EPSS (*Exploit Prediction Scoring System*): <https://www.first.org/epss/>
-- CISA — *Known Exploited Vulnerabilities Catalog*: <https://www.cisa.gov/known-exploited-vulnerabilities-catalog>
-- Wazuh — detección de vulnerabilidades: <https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html>
-- Ollama: <https://github.com/ollama/ollama> · n8n Community Edition: <https://github.com/n8n-io/n8n>
-
-## 14. Gestión de vulnerabilidades (punto 5)
+## 12. Gestión de vulnerabilidades (punto 5)
 
 Plataforma instalada **sólo en el servidor Wazuh** y alojada en él. Documentación completa: [`docs/vulnmgmt.md`](docs/vulnmgmt.md).
 
@@ -374,7 +352,31 @@ sudo ./bootstrap.sh --component vulnmgmt
 | Gestionar vulnerabilidades y actualizaciones | Lee los hallazgos de todos los agentes desde el indexer de Wazuh (≥ 4.8) y genera una acción por paquete: actualizar (con el comando exacto y aviso de reinicio), mitigar o revisar. |
 | Informes periódicos | Temporizador diario (03:30): panel web HTTPS en `https://<servidor-wazuh>:8443`, CSV, histórico y alertas en Wazuh (reglas 100800-100808). |
 | Acciones priorizadas y viables | Riesgo con CVSS + EPSS + CISA KEV + criticidad del servidor; prioridad P1-P4 con plazo (SLA), seguimiento de vencidas, escaladas y resueltas. |
+| **Resolver las vulnerabilidades (remediación)** | Por servidor, comandos listos para copiar (`sudo dnf upgrade -y --disablerepo='wazuh*' <paquetes>`) y un playbook de Ansible (`remediation.yml`) con simulación previa (`--check --diff`), filtro por prioridad (`--tags P1`) y aviso de reinicio. La plataforma **no ejecuta nada**: lo aplica el equipo desde el bastión. Los componentes de Wazuh, las acciones sin parche y los gestores no soportados quedan como trabajo manual. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#6-remediación-de-las-vulnerabilidades). |
 | IA (valor agregado) | Modelo local y gratuito (Ollama + Qwen2.5 1.5B/0.5B) que redacta el resumen ejecutivo y notas, limitado en CPU/RAM y con respaldo por reglas. |
 | No-code (valor agregado) | n8n Community Edition con un flujo semanal que avisa a infraestructura las acciones P1/P2. |
 
 Antes de endurecer el servidor Wazuh, copiar `host_vars/srv-siem.yml.example` (conserva `nginx`, que CIS 2.1.18 desinstalaría).
+
+## 13. Uso de IA generativa
+
+Según las pautas del obligatorio:
+
+- **Herramienta:** Claude Code (Anthropic).
+- **Contexto de uso:** generación del código Ansible y de los scripts, redacción de esta documentación y
+  contraste de los controles contra fuentes públicas (CIS vía ComplianceAsCode, código fuente de OpenSSH, audit,
+  authselect, rsyslog y dnf).
+- **Verificación:** el equipo debe revisar el contenido y validarlo en la maqueta (ver sección 11).
+
+## 14. Referencias
+
+- Center for Internet Security — CIS Benchmarks (Rocky Linux 9 / Red Hat Enterprise Linux 9, v2.0.0): <https://www.cisecurity.org/cis-benchmarks>
+- ComplianceAsCode — mapeo de controles CIS RHEL 9 y perfiles SCAP: <https://github.com/ComplianceAsCode/content>
+- Red Hat — *Security hardening*, Red Hat Enterprise Linux 9: <https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/security_hardening/index>
+- Wazuh — documentación oficial (instalación y enrolamiento de agentes): <https://documentation.wazuh.com/current/>
+- Ansible — colección `ansible.posix`: <https://github.com/ansible-collections/ansible.posix>
+- FIRST — EPSS (*Exploit Prediction Scoring System*): <https://www.first.org/epss/>
+- CISA — *Known Exploited Vulnerabilities Catalog*: <https://www.cisa.gov/known-exploited-vulnerabilities-catalog>
+- Wazuh — detección de vulnerabilidades: <https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html>
+- Ollama: <https://github.com/ollama/ollama> · n8n Community Edition: <https://github.com/n8n-io/n8n>
+

