@@ -185,11 +185,46 @@ sudo ./bootstrap.sh --component vulnmgmt
 
 - **No vuelve a pedir** la contraseña de `admin` del indexer (usa el usuario de lectura que ya existe) y **conserva** la
   contraseña del panel, el certificado, el usuario de lectura y el flujo ya importado en n8n.
-- **Sí vuelve a preguntar por el usuario de la API de Wazuh.** Si se da Enter, la configuración se regenera **sin la API** y el
-  panel pierde la cobertura de agentes (los desconectados o sin hallazgos). Para conservarla, **escribir de nuevo el usuario y
-  la contraseña** cuando los pregunte (la contraseña no se muestra ni queda en el historial del shell). No conviene pasarla
-  en la línea de comandos por esa misma razón.
+- **Recuerda el usuario de la API de Wazuh** (lo guarda en `/etc/vulnmgmt/api.user`, 0640) y vuelve a pedir **sólo su
+  contraseña**, que nunca se escribe en disco ni se muestra. Si se da Enter en la contraseña, la configuración se regenera
+  **sin la API** y el panel pierde la cobertura de agentes (los desconectados o sin hallazgos). No conviene pasar la
+  contraseña en la línea de comandos, porque queda en el historial del shell.
 - Cada ejecución genera además un informe nuevo, igual que `sudo systemctl start vulnmgmt.service`.
+
+### Instalación desatendida
+
+Las tres preguntas interactivas se pueden responder por variables de entorno, de modo que la instalación no espere a
+nadie. El script las usa en lugar de preguntar:
+
+| Variable | Equivale a |
+|---|---|
+| `VULNMGMT_INDEXER_ADMIN_PASSWORD` | Contraseña de `admin` del indexer (`wazuh-passwords.txt`) |
+| `VULNMGMT_API_USER` | Usuario de la API de Wazuh para el inventario de agentes |
+| `VULNMGMT_API_PASSWORD` | Contraseña de ese usuario |
+
+Para que no queden en el historial del shell, conviene dejarlas en un archivo legible sólo por root y cargarlo en el
+momento de ejecutar:
+
+```bash
+sudo install -m 0600 /dev/null /etc/vulnmgmt/install.env
+sudo vi /etc/vulnmgmt/install.env
+```
+
+(contenido: las tres variables, una por línea, en formato `VARIABLE=valor`)
+
+```bash
+sudo bash -c 'set -a; . /etc/vulnmgmt/install.env; set +a; ./bootstrap.sh --component vulnmgmt'
+```
+
+### Entornos sin Podman
+
+El flujo no-code de n8n corre como unidad Quadlet de Podman. En plataformas donde Podman no existe ni se puede
+instalar —el caso de la OVA de Wazuh sobre Amazon Linux 2023—, el preflight lo detecta, **omite n8n** y deja instalado
+todo el resto, avisándolo en la salida. Para desactivarlo de forma explícita:
+
+```bash
+sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_n8n_enabled=false
+```
 
 Prueba sin cambios (`--check`) y modo demostración (publica datos sintéticos si todavía no hay agentes con
 hallazgos):
@@ -221,7 +256,7 @@ ansible-playbook -i inventory/hosts.ini vulnmgmt.yml -e @secrets-vulnmgmt.yml --
 
 | Paso | Archivo |
 |---|---|
-| Valida el sistema operativo (Rocky 9/10 o Amazon Linux 2023), Python 3.9 o superior, que sea el servidor Wazuh y que haya credenciales | `tasks/preflight.yml` |
+| Valida el sistema operativo (Rocky 9/10 o Amazon Linux 2023), Python 3.9 o superior, que sea el servidor Wazuh, que haya credenciales y que Podman esté disponible si se pidió n8n | `tasks/preflight.yml` |
 | Paquetes (python3, nginx, podman…), usuario de servicio `vulnmgmt`, motor y panel, certificado TLS, secretos generados | `tasks/base.yml` |
 | Rol y usuario de **sólo lectura** en el indexer (sólo el índice de vulnerabilidades) y prueba de acceso | `tasks/indexer.yml` |
 | Configuración del motor (`/etc/vulnmgmt/config.json`, 0640) y logrotate | `tasks/config.yml` |

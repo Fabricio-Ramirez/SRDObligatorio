@@ -197,8 +197,19 @@ if [[ "${COMPONENT}" == "vulnmgmt" ]]; then
   if [[ -z "${VULNMGMT_INDEXER_ADMIN_PASSWORD:-}" && ! -f /etc/vulnmgmt/indexer.secret ]]; then
     read -rsp "Wazuh indexer 'admin' password (wazuh-passwords.txt): " VULNMGMT_INDEXER_ADMIN_PASSWORD </dev/tty; echo
   fi
+  # The API user (not its password) is remembered so repeat runs are unattended.
+  API_USER_FILE=/etc/vulnmgmt/api.user
+  if [[ -z "${VULNMGMT_API_USER:-}" && -r "${API_USER_FILE}" ]]; then
+    VULNMGMT_API_USER="$(tr -d '\r\n' < "${API_USER_FILE}")"
+    [[ -n "${VULNMGMT_API_USER}" ]] && log "Reusing the Wazuh API user from ${API_USER_FILE}: ${VULNMGMT_API_USER}"
+  fi
   if [[ -z "${VULNMGMT_API_USER:-}" ]]; then
     read -rp "Wazuh API user for agent inventory (optional, Enter to skip): " VULNMGMT_API_USER </dev/tty
+    if [[ -n "${VULNMGMT_API_USER}" ]]; then
+      mkdir -p /etc/vulnmgmt && chmod 0750 /etc/vulnmgmt
+      printf '%s\n' "${VULNMGMT_API_USER}" > "${API_USER_FILE}"
+      chmod 0640 "${API_USER_FILE}"
+    fi
   fi
   if [[ -n "${VULNMGMT_API_USER:-}" && -z "${VULNMGMT_API_PASSWORD:-}" ]]; then
     read -rsp "Wazuh API password for ${VULNMGMT_API_USER}: " VULNMGMT_API_PASSWORD </dev/tty; echo

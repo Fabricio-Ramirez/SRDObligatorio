@@ -62,3 +62,46 @@
   when:
     - vulnmgmt_ai_enabled | bool
     - ansible_facts['memtotal_mb'] < 9000
+
+# n8n runs as a Podman Quadlet unit. Some supported platforms (for example the
+# Wazuh OVA on Amazon Linux 2023) ship no podman package at all, and without
+# this check the run fails later, during package installation, with a bare dnf
+# error that says nothing about n8n.
+- name: Preflight | Look for Podman (required by the n8n workflows)
+  ansible.builtin.command: command -v podman
+  register: vulnmgmt_podman_found
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: vulnmgmt_n8n_enabled | bool
+
+- name: Preflight | Check whether Podman can be installed
+  ansible.builtin.command: dnf -q list --available podman
+  register: vulnmgmt_podman_available
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - vulnmgmt_n8n_enabled | bool
+    - vulnmgmt_podman_found.rc != 0
+
+- name: Preflight | Skip the no-code workflows when Podman is unavailable
+  ansible.builtin.set_fact:
+    vulnmgmt_n8n_enabled: false
+  when:
+    - vulnmgmt_n8n_enabled | bool
+    - vulnmgmt_podman_found.rc != 0
+    - vulnmgmt_podman_available.rc != 0
+
+- name: Preflight | Report that the no-code workflows were skipped
+  ansible.builtin.debug:
+    msg: >-
+      Podman is not installed and is not available in the configured repositories, so the
+      n8n workflows were skipped. Everything else installs normally. To add them later,
+      install Podman 4.4 or newer and run again, or host n8n on another machine pointing
+      it at the reports this engine publishes.
+  when:
+    - not (vulnmgmt_n8n_enabled | bool)
+    - vulnmgmt_podman_found is defined
+    - vulnmgmt_podman_found.rc is defined
+    - vulnmgmt_podman_found.rc != 0
