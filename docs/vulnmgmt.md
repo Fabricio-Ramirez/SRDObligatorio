@@ -184,7 +184,7 @@ Es idempotente: se puede volver a ejecutar para actualizar el motor, el panel o 
 | Qué | Cómo |
 |---|---|
 | Panel web | `https://<IP-del-servidor-Wazuh>:8443/` — usuario `infra`, contraseña: `sudo cat /etc/vulnmgmt/web.secret`. El certificado es autofirmado (el navegador pide aceptarlo). |
-| Generar un informe ahora | `sudo systemctl start vulnmgmt.service` |
+| Generar un informe ahora | `sudo systemctl start vulnmgmt.service` (ver [Generar el informe en caliente](#generar-el-informe-en-caliente)) |
 | Ver la ejecución | `journalctl -u vulnmgmt.service` |
 | Próxima ejecución | `systemctl list-timers vulnmgmt.timer` |
 | Plan de remediación | `/var/www/vulnmgmt/data/remediation.yml` (botón *Descargar playbook* del panel) |
@@ -205,6 +205,37 @@ El panel muestra:
 - **Servidores:** hallazgos, riesgo máximo y criticidad de cada uno (incluye los agentes sin hallazgos si la API
   está configurada).
 - **Tendencia** y **metodología** usadas.
+
+### Generar el informe en caliente
+
+El informe no hace falta esperarlo: se puede generar en cualquier momento, desde el servidor Wazuh, sin esperar al horario programado.
+
+```bash
+sudo systemctl start vulnmgmt.service
+```
+
+Ese comando espera a que el informe termine y devuelve error si falló. Para que la terminal vuelva enseguida y seguir
+el avance aparte:
+
+```bash
+sudo systemctl start --no-block vulnmgmt.service
+```
+
+```bash
+journalctl -u vulnmgmt.service -f
+```
+
+Al terminar, el panel muestra el informe nuevo al recargar la página. La primera vez, el informe también se genera
+solo al final de la instalación (`vulnmgmt_first_run: run`).
+
+| Qué | Detalle |
+|---|---|
+| **Informe programado** | Todos los días a las 03:30 (`vulnmgmt_schedule`), con hasta 15 minutos de retraso aleatorio. Si el servidor estaba apagado a esa hora, se ejecuta al volver a encenderse (`Persistent=true`). El generado en caliente no cambia ese horario. |
+| **Desde el panel o n8n** | **No está previsto**: el panel es de sólo lectura a propósito, porque lanzar un comando desde la web ampliaría la superficie de ataque del servidor Wazuh. Se genera desde la terminal. |
+| **Cuánto tarda** | Con la IA activa puede tardar varios minutos en una VM chica (el límite es `vulnmgmt_ai_timeout`, 900 segundos); sin IA, o con el resumen por reglas, mucho menos. No se midieron tiempos reales en una VM. |
+| **Qué tan actual es** | El informe refleja lo que Wazuh **ya tiene indexado**. El inventario de paquetes de cada agente se refresca cada hora (`syscollector`) y el feed de vulnerabilidades cada 60 minutos (`feed-update-interval`), así que un servidor recién parcheado puede seguir apareciendo hasta el siguiente ciclo de Wazuh. |
+| **KEV y EPSS** | Se guardan en caché (KEV 24 horas, EPSS por día), por lo que varios informes el mismo día reutilizan esos datos. |
+| **Si falla** | `journalctl -u vulnmgmt.service` indica la causa. El panel sigue mostrando el último informe válido: una ejecución fallida no publica un resultado vacío. |
 
 ## 6. Remediación de las vulnerabilidades
 

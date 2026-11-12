@@ -350,7 +350,7 @@ sudo ./bootstrap.sh --component vulnmgmt
 | Requisito | Cómo se cumple |
 |---|---|
 | Gestionar vulnerabilidades y actualizaciones | Lee los hallazgos de todos los agentes desde el indexer de Wazuh (≥ 4.8) y genera una acción por paquete: actualizar (con el comando exacto y aviso de reinicio), mitigar o revisar. |
-| Informes periódicos | Temporizador diario (03:30): panel web HTTPS en `https://<servidor-wazuh>:8443`, CSV, histórico y alertas en Wazuh (reglas 100800-100808). |
+| Informes periódicos | Temporizador diario (03:30) y también **en caliente** con `sudo systemctl start vulnmgmt.service` (ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#generar-el-informe-en-caliente)): panel web HTTPS en `https://<servidor-wazuh>:8443`, CSV, histórico y alertas en Wazuh (reglas 100800-100808). |
 | Acciones priorizadas y viables | Riesgo con CVSS + EPSS + CISA KEV + criticidad del servidor; prioridad P1-P4 con plazo (SLA), seguimiento de vencidas, escaladas y resueltas. |
 | **Resolver las vulnerabilidades (remediación)** | Por servidor, comandos listos para copiar (`sudo dnf upgrade -y --disablerepo='wazuh*' <paquetes>`) y un playbook de Ansible (`remediation.yml`) con simulación previa (`--check --diff`), filtro por prioridad (`--tags P1`) y aviso de reinicio. La plataforma **no ejecuta nada**: lo aplica el equipo desde el bastión. Los componentes de Wazuh, las acciones sin parche y los gestores no soportados quedan como trabajo manual. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#6-remediación-de-las-vulnerabilidades). |
 | IA (valor agregado) | Modelo local y gratuito (Ollama + Qwen2.5 1.5B/0.5B) que redacta el resumen ejecutivo y notas, limitado en CPU/RAM y con respaldo por reglas. |
