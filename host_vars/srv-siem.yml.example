@@ -1,4 +1,7 @@
 ---
+# NOT USED: the team decided not to harden the Wazuh server (only vulnmgmt.yml runs there).
+# Kept for the case where a Rocky Linux Wazuh server is hardened in the future.
+#
 # ONLY for a Wazuh server running Rocky Linux 9/10. The hardening follows the CIS Rocky/RHEL
 # benchmarks and does not run on Amazon Linux (bootstrap.sh rejects it); the vulnerability
 # platform (vulnmgmt.yml) does support Amazon Linux 2023.

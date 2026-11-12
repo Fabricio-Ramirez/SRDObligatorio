@@ -107,14 +107,23 @@ Componentes y consumo aproximado:
 
 ### Relación con el endurecimiento (punto 1)
 
-> **El endurecimiento sólo aplica a Rocky Linux 9/10** (sigue los benchmarks CIS de Rocky y RHEL). Si el servidor
-> Wazuh es **Amazon Linux**, la plantilla de endurecimiento no se ejecuta ahí (`bootstrap.sh` lo rechaza con un
-> mensaje claro) y esta sección no aplica: la plataforma de vulnerabilidades sí se instala, pero ese servidor queda
-> sin el endurecimiento CIS de esta plantilla. Cada componente de `bootstrap.sh` valida su propio sistema operativo,
-> así que uno nunca bloquea al otro.
+> **Decisión del equipo: el servidor Wazuh no se endurece con la plantilla del punto 1.** En ese servidor sólo se
+> instala la plataforma de vulnerabilidades (`sudo ./bootstrap.sh --component vulnmgmt`). El endurecimiento
+> (`--component hardening`) se aplica al resto de los servidores.
 
-Si el servidor Wazuh es **Rocky Linux**, también se endurece, pero tiene dos diferencias que hay que declarar **antes**
-de ejecutar la plantilla de endurecimiento sobre él (si no, CIS 2.1.18 desinstala nginx y el panel deja de funcionar):
+Consecuencias de esa decisión:
+
+- **Parches del propio servidor Wazuh:** sin el endurecimiento no hay `dnf-automatic`, así que sus actualizaciones las aplica
+  el equipo a mano. El panel igual lo muestra como el agente 000, con su comando local (sección 6). Los componentes
+  `wazuh-*` siempre se actualizan siguiendo la guía oficial de Wazuh.
+- **No se usa `host_vars/srv-siem.yml.example`**: esa excepción (conservar `nginx`) sólo hace falta si algún día se
+  endureciera un servidor Wazuh.
+- **Sistema operativo:** el endurecimiento sólo aplica a Rocky Linux 9/10 (sigue los benchmarks CIS de Rocky y RHEL).
+  `bootstrap.sh` lo rechaza en otros sistemas, como Amazon Linux, con un mensaje claro. Cada componente valida su propio
+  sistema operativo, así que uno nunca bloquea al otro.
+
+Si en el futuro se decidiera endurecer un servidor Wazuh **con Rocky Linux**, hay que declarar dos diferencias **antes** de
+ejecutar la plantilla sobre él (si no, CIS 2.1.18 desinstala nginx y el panel deja de funcionar):
 
 ```bash
 cp host_vars/srv-siem.yml.example host_vars/srv-siem.yml      # ejecución desde un nodo de control
@@ -160,6 +169,27 @@ git pull --ff-only
 
 Si no hay `firewalld` activo (es lo habitual en Amazon Linux), el rol **no abre el puerto 8443** y lo avisa: hay que
 abrirlo con el firewall que se use (iptables, nftables o el grupo de seguridad de la nube).
+
+### Volver a ejecutar la instalación
+
+El comando es idempotente: sirve para actualizar el motor, el panel o la configuración. Primero actualizar el repositorio
+(el script no se actualiza a sí mismo cuando se ejecuta desde un clon) y volver a lanzar:
+
+```bash
+cd <carpeta-del-repositorio> && git pull --ff-only
+```
+
+```bash
+sudo ./bootstrap.sh --component vulnmgmt
+```
+
+- **No vuelve a pedir** la contraseña de `admin` del indexer (usa el usuario de lectura que ya existe) y **conserva** la
+  contraseña del panel, el certificado, el usuario de lectura y el flujo ya importado en n8n.
+- **Sí vuelve a preguntar por el usuario de la API de Wazuh.** Si se da Enter, la configuración se regenera **sin la API** y el
+  panel pierde la cobertura de agentes (los desconectados o sin hallazgos). Para conservarla, **escribir de nuevo el usuario y
+  la contraseña** cuando los pregunte (la contraseña no se muestra ni queda en el historial del shell). No conviene pasarla
+  en la línea de comandos por esa misma razón.
+- Cada ejecución genera además un informe nuevo, igual que `sudo systemctl start vulnmgmt.service`.
 
 Prueba sin cambios (`--check`) y modo demostración (publica datos sintéticos si todavía no hay agentes con
 hallazgos):

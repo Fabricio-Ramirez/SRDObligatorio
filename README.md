@@ -361,7 +361,7 @@ lo empaqueta. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#3-requisitos-previos).
 | IA (valor agregado) | Modelo local y gratuito (Ollama + Qwen2.5 1.5B/0.5B) que redacta el resumen ejecutivo y notas, limitado en CPU/RAM y con respaldo por reglas. |
 | No-code (valor agregado) | n8n Community Edition con un flujo semanal que avisa a infraestructura las acciones P1/P2. |
 
-Si el servidor Wazuh es Rocky y se endurece, copiar antes `host_vars/srv-siem.yml.example` (conserva `nginx`, que CIS 2.1.18 desinstalaría). Si es Amazon Linux, la plantilla de endurecimiento no le aplica.
+**Decisión del equipo: el servidor Wazuh no se endurece con la plantilla del punto 1**; ahí sólo se instala esta plataforma. Detalle y consecuencias en [`docs/vulnmgmt.md`](docs/vulnmgmt.md#relación-con-el-endurecimiento-punto-1).
 
 ## 13. Uso de IA generativa
 
