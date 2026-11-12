@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # =============================================================================
-# bootstrap.sh - Rocky Linux 9 / 10 hardening (CIS Benchmark Level 1 Server)
+# bootstrap.sh - installs and runs one component of this repository on THIS server:
 #
-# 1. Installs git and ansible-core from the Rocky Linux repositories.
+#   --component hardening (default)  CIS Benchmark Level 1 hardening. Rocky Linux 9 / 10 only.
+#   --component vulnmgmt             Vulnerability management platform. Runs on the Wazuh
+#                                    server: Rocky Linux 9 / 10 or Amazon Linux 2023
+#                                    (the operating system of the official Wazuh image).
+#
+# Each component checks the operating system it needs; one never blocks the other.
+#
+# 1. Installs git and Ansible (ansible-core from the distribution repositories; where
+#    the distribution does not package it, a Python virtual environment in /opt/srd-ansible).
 # 2. Downloads (or updates) this repository.
 # 3. Installs the required Ansible collection.
-# 4. Runs the hardening playbook for the detected version against the local
-#    server: site.yml (Rocky 9, CIS v2.0.0) or site-rocky10.yml (Rocky 10,
-#    CIS RHEL 10 v1.0.1).
+# 4. Runs the playbook of the component: site.yml (Rocky 9, CIS v2.0.0),
+#    site-rocky10.yml (Rocky 10, CIS RHEL 10 v1.0.1) or vulnmgmt.yml.
 #
 # Usage (as root, on the freshly installed server):
 #   ./bootstrap.sh --siem-host 10.0.10.12            # inside a clone
@@ -25,6 +32,8 @@ LOG_DIR="/var/log/srd-hardening"
 SIEM_TYPE="${SIEM_TYPE:-}"
 SIEM_HOST="${SIEM_HOST:-}"
 COMPONENT="${COMPONENT:-hardening}"   # hardening | vulnmgmt
+OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"   # overridable only to test the detection
+VENV_DIR="${VENV_DIR:-/opt/srd-ansible}"                # ansible-core fallback (outside the repository)
 CHECK_MODE=0
 TAGS=""
 EXTRA_ARGS=()
@@ -38,8 +47,9 @@ usage() {
 Usage: $0 [options] [-- extra ansible-playbook arguments]
 
 Options:
-  --component NAME     hardening (default, every server) or vulnmgmt (vulnerability
-                       management platform, only on the Wazuh server)
+  --component NAME     hardening (default; Rocky Linux 9/10 only) or vulnmgmt (vulnerability
+                       management platform, only on the Wazuh server: Rocky Linux 9/10
+                       or Amazon Linux 2023)
   --siem-host HOST     Wazuh manager / syslog collector address (required unless --siem-type none)
   --siem-type TYPE     wazuh (default), syslog or none
   --branch NAME        Git branch to use (default: repository default branch)
@@ -75,19 +85,31 @@ done
 # --- 1. Pre-checks ----------------------------------------------------------
 [[ ${EUID} -eq 0 ]] || die "Run as root (sudo $0 ...)."
 
-# shellcheck disable=SC1091
-. /etc/os-release
-[[ "${ID:-}" == "rocky" ]] || die "This hardening targets Rocky Linux 9 or 10 (found: ${PRETTY_NAME:-unknown})."
-case "${VERSION_ID%%.*}" in
-  9)  PLAYBOOK="site.yml" ;;
-  10) PLAYBOOK="site-rocky10.yml" ;;
-  *)  die "This hardening targets Rocky Linux 9 or 10 (found: ${PRETTY_NAME:-unknown})." ;;
-esac
+# shellcheck disable=SC1090
+. "${OS_RELEASE_FILE}"
+OS_ID="${ID:-unknown}"
+OS_MAJOR="${VERSION_ID:-}"; OS_MAJOR="${OS_MAJOR%%.*}"
+OS_NAME="${PRETTY_NAME:-${OS_ID} ${OS_MAJOR}}"
 
+# The operating system is validated by the component that needs it, so that the
+# hardening (CIS Rocky benchmarks) never blocks the vulnerability platform, which
+# runs on the Wazuh server.
 case "${COMPONENT}" in
-  hardening) ;;
-  vulnmgmt)  PLAYBOOK="vulnmgmt.yml" ;;
-  *)         die "Unknown component: ${COMPONENT} (use hardening or vulnmgmt)." ;;
+  hardening)
+    [[ "${OS_ID}" == "rocky" ]] || die "The hardening targets Rocky Linux 9 or 10 (found: ${OS_NAME}). It follows the CIS Rocky Linux benchmarks and does not apply to other distributions."
+    case "${OS_MAJOR}" in
+      9)  PLAYBOOK="site.yml" ;;
+      10) PLAYBOOK="site-rocky10.yml" ;;
+      *)  die "The hardening targets Rocky Linux 9 or 10 (found: ${OS_NAME})." ;;
+    esac ;;
+  vulnmgmt)
+    PLAYBOOK="vulnmgmt.yml"
+    case "${OS_ID}:${OS_MAJOR}" in
+      rocky:9|rocky:10|amzn:2023) ;;
+      amzn:*) die "Amazon Linux ${OS_MAJOR} is not supported (found: ${OS_NAME}): the platform needs dnf and Python 3.9 or newer, i.e. Amazon Linux 2023." ;;
+      *)      die "The vulnerability platform targets Rocky Linux 9/10 or Amazon Linux 2023 (found: ${OS_NAME})." ;;
+    esac ;;
+  *) die "Unknown component: ${COMPONENT} (use hardening or vulnmgmt)." ;;
 esac
 
 # The playbook stops early if no SIEM address is configured anywhere
@@ -97,8 +119,32 @@ if [[ "${COMPONENT}" == "hardening" && "${SIEM_TYPE:-wazuh}" != "none" && -z "${
 fi
 
 # --- 2. Install git and Ansible ---------------------------------------------
-log "Installing git and ansible-core from the Rocky Linux repositories..."
-dnf -y -q install git ansible-core
+# ansible-core < 2.16 so that it also runs on Python 3.9 (Amazon Linux 2023, Rocky 9).
+install_ansible_in_venv() {
+  log "Installing ansible-core in a Python virtual environment (${VENV_DIR})..."
+  python3 -m venv "${VENV_DIR}" \
+    || die "python3 -m venv failed: install the python3 virtual environment support and run again."
+  "${VENV_DIR}/bin/pip" install -q --upgrade pip
+  "${VENV_DIR}/bin/pip" install -q "ansible-core>=2.14,<2.16" \
+    || die "pip could not install ansible-core (is pypi.org reachable?)."
+}
+
+if [[ "${OS_ID}" == "rocky" ]]; then
+  log "Installing git and ansible-core from the Rocky Linux repositories..."
+  dnf -y -q install git ansible-core
+else
+  log "Installing git..."
+  dnf -y -q install git
+  if command -v ansible-playbook >/dev/null 2>&1; then
+    log "Ansible is already installed: $(command -v ansible-playbook)"
+  elif dnf -y -q install ansible-core 2>/dev/null; then
+    log "ansible-core installed from the distribution repositories."
+  else
+    install_ansible_in_venv
+  fi
+fi
+# The virtual environment (if any) goes first in the PATH for the rest of the script.
+[[ -x "${VENV_DIR}/bin/ansible-playbook" ]] && export PATH="${VENV_DIR}/bin:${PATH}"
 
 # --- 3. Download / update the repository ------------------------------------
 # If this script is run from inside a clone, that clone is used as-is.
@@ -128,6 +174,8 @@ if ansible-galaxy collection list ansible.posix 2>/dev/null | grep -q '^ansible\
 else
   log "Installing the ansible.posix collection..."
   if ! ansible-galaxy collection install -r requirements.yml -p ./collections; then
+    [[ "${OS_ID}" == "rocky" ]] \
+      || die "Could not install ansible.posix from Ansible Galaxy (is galaxy.ansible.com reachable?)."
     warn "Ansible Galaxy is not reachable; trying the EPEL package instead."
     dnf -y -q install epel-release
     dnf -y -q install ansible-collection-ansible-posix \

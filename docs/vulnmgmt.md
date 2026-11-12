@@ -80,9 +80,15 @@ Componentes y consumo aproximado:
 
 ## 3. Requisitos previos
 
-1. **Servidor Wazuh 4.8 o superior *all-in-one*** (manager + indexer + dashboard) sobre **Rocky Linux 9 o 10**,
-   instalado con el asistente oficial (`wazuh-install.sh -a`). La detección de vulnerabilidades viene
-   habilitada por defecto (`<vulnerability-detection>` en `/var/ossec/etc/ossec.conf`, con `index-status` en `yes`).
+1. **Servidor Wazuh 4.8 o superior *all-in-one*** (manager + indexer + dashboard) sobre **Rocky Linux 9 o 10** o
+   **Amazon Linux 2023** (el sistema de la imagen oficial de Wazuh, según el equipo), instalado con el asistente oficial
+   (`wazuh-install.sh -a`) o con esa imagen. **Amazon Linux 2 no se admite** (trae Python 3.7 y el motor necesita 3.9 o
+   superior). La detección de vulnerabilidades viene habilitada por defecto (`<vulnerability-detection>` en
+   `/var/ossec/etc/ossec.conf`, con `index-status` en `yes`). Para saber qué sistema tiene el servidor:
+
+   ```bash
+   grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release; python3 --version
+   ```
 2. Agentes Wazuh enrolados en los servidores (lo hace la plantilla de endurecimiento).
 3. La contraseña del usuario **`admin` del indexer**. El asistente la deja en `wazuh-install-files.tar`:
 
@@ -96,13 +102,19 @@ Componentes y consumo aproximado:
 5. **RAM:** Wazuh *all-in-one* necesita unos 8 GB; la IA suma 1-2 GB **sólo mientras corre** el informe. Si no hay
    memoria libre suficiente el motor usa el modelo más chico o, si tampoco alcanza, el resumen por reglas.
 6. Salida a Internet durante la instalación: `github.com` (Ollama), `registry.ollama.ai` (modelos), `docker.io`
-   (n8n) y repositorios de Rocky. En cada informe, opcionalmente, `cisa.gov` o `raw.githubusercontent.com` (KEV)
+   (n8n) y los repositorios de la distribución (Rocky o Amazon Linux). En cada informe, opcionalmente, `cisa.gov` o `raw.githubusercontent.com` (KEV)
    y `api.first.org` (EPSS). Sin Internet la plataforma sigue funcionando con la última caché.
 
 ### Relación con el endurecimiento (punto 1)
 
-El servidor Wazuh también se endurece, pero tiene dos diferencias que hay que declarar **antes** de ejecutar la
-plantilla de endurecimiento sobre él (si no, CIS 2.1.18 desinstala nginx y el panel deja de funcionar):
+> **El endurecimiento sólo aplica a Rocky Linux 9/10** (sigue los benchmarks CIS de Rocky y RHEL). Si el servidor
+> Wazuh es **Amazon Linux**, la plantilla de endurecimiento no se ejecuta ahí (`bootstrap.sh` lo rechaza con un
+> mensaje claro) y esta sección no aplica: la plataforma de vulnerabilidades sí se instala, pero ese servidor queda
+> sin el endurecimiento CIS de esta plantilla. Cada componente de `bootstrap.sh` valida su propio sistema operativo,
+> así que uno nunca bloquea al otro.
+
+Si el servidor Wazuh es **Rocky Linux**, también se endurece, pero tiene dos diferencias que hay que declarar **antes**
+de ejecutar la plantilla de endurecimiento sobre él (si no, CIS 2.1.18 desinstala nginx y el panel deja de funcionar):
 
 ```bash
 cp host_vars/srv-siem.yml.example host_vars/srv-siem.yml      # ejecución desde un nodo de control
@@ -137,6 +149,18 @@ y, opcionalmente, el usuario y la contraseña de la API, y ejecuta `vulnmgmt.yml
 archivo temporal con permisos 0600 que se borra al terminar; nunca aparecen en la línea de comandos.
 Al volver a ejecutarlo ya no pide la contraseña del indexer (usa el usuario de lectura creado).
 
+**En Amazon Linux 2023** el mismo comando funciona. Si la distribución no empaqueta `ansible-core`, `bootstrap.sh` lo
+instala en un entorno virtual de Python aparte (`/opt/srd-ansible`, `ansible-core` 2.14 o 2.15, que corren con Python 3.9)
+y lo usa desde ahí; no toca el Python del sistema. Si ya tenías el repositorio clonado, actualizarlo **antes** de
+ejecutar (el script no se actualiza a sí mismo al correr desde un clon):
+
+```bash
+git pull --ff-only
+```
+
+Si no hay `firewalld` activo (es lo habitual en Amazon Linux), el rol **no abre el puerto 8443** y lo avisa: hay que
+abrirlo con el firewall que se use (iptables, nftables o el grupo de seguridad de la nube).
+
 Prueba sin cambios (`--check`) y modo demostración (publica datos sintéticos si todavía no hay agentes con
 hallazgos):
 
@@ -167,7 +191,7 @@ ansible-playbook -i inventory/hosts.ini vulnmgmt.yml -e @secrets-vulnmgmt.yml --
 
 | Paso | Archivo |
 |---|---|
-| Valida el sistema operativo, que sea el servidor Wazuh y que haya credenciales | `tasks/preflight.yml` |
+| Valida el sistema operativo (Rocky 9/10 o Amazon Linux 2023), Python 3.9 o superior, que sea el servidor Wazuh y que haya credenciales | `tasks/preflight.yml` |
 | Paquetes (python3, nginx, podman…), usuario de servicio `vulnmgmt`, motor y panel, certificado TLS, secretos generados | `tasks/base.yml` |
 | Rol y usuario de **sólo lectura** en el indexer (sólo el índice de vulnerabilidades) y prueba de acceso | `tasks/indexer.yml` |
 | Configuración del motor (`/etc/vulnmgmt/config.json`, 0640) y logrotate | `tasks/config.yml` |
@@ -436,7 +460,8 @@ Todas están en `roles/vulnmgmt/defaults/main.yml`.
 | `vulnmgmt_allowed_networks` | `[]` (cualquiera) | Redes que pueden abrir el panel, p. ej. `["10.0.99.0/24"]`. |
 | `vulnmgmt_schedule` | `*-*-* 03:30:00` | Frecuencia del informe (formato `OnCalendar` de systemd). |
 | `vulnmgmt_wazuh_event_priorities` | `[P1, P2]` | Prioridades que generan alertas en Wazuh. |
-| `vulnmgmt_n8n_enabled` | `true` | `false` para no instalar n8n. |
+| `vulnmgmt_n8n_enabled` | `true` | `false` para no instalar n8n (n8n necesita Podman 4.4 o superior). |
+| `vulnmgmt_allow_untested_platform` | `false` | `true` para probar otra distribución con `dnf` (sin soporte); nunca saltea la verificación de Python. |
 | `vulnmgmt_first_run` | `run` | `demo` publica datos sintéticos de demostración. |
 
 ## 13. Archivos
@@ -470,6 +495,10 @@ vulnmgmt/
 | `journalctl -u vulnmgmt.service` muestra error 401/403 del indexer | Recrear el usuario de lectura: `sudo rm /etc/vulnmgmt/indexer.secret` y volver a ejecutar `sudo ./bootstrap.sh --component vulnmgmt` (pide la contraseña de `admin` y genera una nueva). |
 | El panel dice "Resumen por reglas (IA no disponible)" | Falta memoria libre o Ollama está detenido: `systemctl status ollama`, `journalctl -u ollama`. El informe se publica igual. |
 | Faltan KEV/EPSS (aviso en el panel) | Sin salida a Internet: se usa la última caché; los avisos lo indican. |
+| `The vulnerability platform targets Rocky Linux 9/10 or Amazon Linux 2023` | El sistema no está soportado (por ejemplo Amazon Linux 2 o Rocky 8). Ver `grep PRETTY_NAME /etc/os-release`. |
+| `No package nginx available` (o `podman`, `zstd`, `logrotate`) en Amazon Linux | Dos causas posibles: el paquete **no existe** en esa distribución, o el servidor **no llega a sus repositorios**. Distinguirlo con `dnf repolist` y `dnf list --available nginx podman zstd logrotate`. Si falta sólo `podman`, instalar sin n8n (ver la fila siguiente). |
+| `n8n needs Podman 4.4 or newer`, o `podman` no disponible | Actualizar Podman, o instalar sin n8n: `sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_n8n_enabled=false`. **Sin n8n se pierde el flujo no-code semanal**; el resto de la plataforma (panel, IA, alertas y remediación) funciona igual. |
+| `firewalld is not running ... NOT opened` | No hay `firewalld`: abrir el puerto 8443/tcp con el firewall que se use. |
 | `skipping: no hosts matched` al ejecutar el playbook | El nombre del agente de Wazuh no existe en el inventario: usarlo como alias en `inventory/hosts.ini` (sección 6). |
 | El panel no abre desde la red | `firewall-cmd --list-all` y `vulnmgmt_allowed_networks`; `systemctl status nginx`. |
 | nginx desapareció tras endurecer el servidor Wazuh | Falta `host_vars` con `hardening_packages_keep: [nginx]` (sección 3); volver a ejecutar el rol `vulnmgmt`. |
@@ -503,8 +532,19 @@ vulnmgmt/
 
 **Limitaciones (validar en la maqueta antes de la defensa):**
 
-- No se ejecutó el rol completo sobre una VM Rocky 9/10 con Wazuh real (systemd, SELinux *enforcing*,
+- No se ejecutó el rol completo sobre una VM (Rocky 9/10 o Amazon Linux 2023) con Wazuh real (systemd, SELinux *enforcing*,
   firewalld y Podman reales).
+- **Amazon Linux 2023:** se probó `bootstrap.sh --component vulnmgmt` completo dentro de la imagen oficial de Amazon Linux 2023
+  (`ID=amzn`, Python 3.9.25): detecta el sistema, instala `ansible-core` 2.15.13 en el entorno virtual, y el rol pasa los
+  chequeos de sistema operativo, de Python, de servidor Wazuh y de credenciales con los hechos reales de Ansible
+  (`Amazon` / `2023`). También se probó la matriz de plataformas (Rocky 9/10 y Amazon 2023 pasan; Amazon 2, Rocky 8 y
+  Ubuntu se rechazan con un mensaje claro), que el endurecimiento sigue rechazando a Amazon Linux y que Rocky 9 y 10
+  eligen los mismos playbooks que antes.
+- **Sin validar en Amazon Linux 2023** (el entorno de pruebas no llega a `cdn.amazonlinux.com`): que sus repositorios
+  tengan `nginx`, `openssl`, `tar`, `zstd`, `logrotate` y `podman` (y que `podman` sea 4.4 o superior), el usuario y las
+  rutas de `nginx`, `systemd`, SELinux y el firewall reales, y las rutas de Wazuh de esa imagen
+  (`/var/ossec`, `/etc/wazuh-indexer/certs/root-ca.pem`). Si falta algún paquete, el error aparece en la tarea
+  *Install the required packages*.
 - **No se probó una actualización real con `dnf`/`apt`**: el entorno de pruebas no llega a los repositorios de Rocky, así
   que el paso `dnf` se verificó sólo en modo `--check` (sin repositorios) y la variante `deb` sólo con sintaxis y lint.
   Validar `--check` y luego la aplicación en un servidor de prueba antes de usarlo en producción.

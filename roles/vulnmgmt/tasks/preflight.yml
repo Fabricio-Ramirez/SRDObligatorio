@@ -1,10 +1,26 @@
 ---
 - name: Preflight | Check the operating system
   ansible.builtin.assert:
-    that:
-      - ansible_facts['distribution'] == 'Rocky'
-      - ansible_facts['distribution_major_version'] in vulnmgmt_supported_major_versions
-    fail_msg: "vulnmgmt targets Rocky Linux {{ vulnmgmt_supported_major_versions | join('/') }}."
+    that: >-
+      vulnmgmt_allow_untested_platform | bool or
+      ansible_facts['distribution_major_version'] in
+      (vulnmgmt_supported_platforms | selectattr('distribution', 'equalto', ansible_facts['distribution'])
+       | map(attribute='versions') | flatten | list)
+    fail_msg: >-
+      vulnmgmt supports {{ _platforms }}; found {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }}. Set vulnmgmt_allow_untested_platform=true to try another
+      dnf-based distribution at your own risk.
+    quiet: true
+  vars:
+    _platforms: >-
+      {% for p in vulnmgmt_supported_platforms %}{{ p.distribution }} {{ p.versions | join('/') }}{% if not loop.last %}, {% endif %}{% endfor %}
+
+- name: Preflight | Check the Python version used by the engine
+  ansible.builtin.assert:
+    that: ansible_facts['python_version'] is version(vulnmgmt_min_python, '>=')
+    fail_msg: >-
+      The engine needs Python {{ vulnmgmt_min_python }} or newer; this server's python3 is
+      {{ ansible_facts['python_version'] }} (Amazon Linux 2 ships Python 3.7: use Amazon Linux 2023).
     quiet: true
 
 - name: Preflight | Look for the Wazuh manager

@@ -1,4 +1,19 @@
 ---
+# Quadlet (the .container units below) needs Podman 4.4 or newer.
+- name: n8n | Read the Podman version
+  ansible.builtin.command: podman --version
+  register: vulnmgmt_podman_version
+  changed_when: false
+  check_mode: false
+
+- name: n8n | Require a Podman with Quadlet support
+  ansible.builtin.assert:
+    that: (vulnmgmt_podman_version.stdout | regex_search('[0-9]+(\.[0-9]+)+')) is version('4.4', '>=')
+    fail_msg: >-
+      n8n needs Podman 4.4 or newer (Quadlet); found "{{ vulnmgmt_podman_version.stdout }}".
+      Install the rest without it with -e vulnmgmt_n8n_enabled=false.
+    quiet: true
+
 # n8n runs as uid 1000 ("node") inside the container.
 - name: n8n | Create the data, import and certificate directories
   ansible.builtin.file:

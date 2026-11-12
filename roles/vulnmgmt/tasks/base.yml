@@ -51,6 +51,16 @@
   loop: [index.html, app.js, style.css]
 
 # --- TLS certificate for the dashboard (self-signed, includes 127.0.0.1) -------
+# Rocky ships these directories with exactly these modes; other distributions may not.
+- name: Base | Ensure the system certificate directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [/etc/pki/tls/certs, /etc/pki/tls/private]
+
 - name: Base | Create the dashboard TLS certificate
   ansible.builtin.command: >-
     openssl req -x509 -newkey rsa:3072 -sha256 -days 825 -nodes

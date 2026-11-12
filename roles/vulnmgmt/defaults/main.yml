@@ -7,7 +7,15 @@
 # role never writes them into the repository.
 # =============================================================================
 
-vulnmgmt_supported_major_versions: ["9", "10"]
+# Platforms this role was written for. The Wazuh server image is Amazon Linux 2023; Rocky is also supported.
+vulnmgmt_supported_platforms:
+  - {distribution: Rocky, versions: ["9", "10"]}
+  - {distribution: Amazon, versions: ["2023"]}
+# Python used by the engine (/usr/bin/python3): the code needs 3.9 or newer.
+vulnmgmt_min_python: "3.9"
+# true = skip the platform list (never the Python check). Unsupported: dnf, systemd and the
+# Wazuh paths of the all-in-one installation are still required.
+vulnmgmt_allow_untested_platform: false
 vulnmgmt_managed_comment: "Managed by Ansible (role: vulnmgmt) - local changes will be overwritten"
 
 # --- Wazuh indexer (source of the vulnerability data) -------------------------

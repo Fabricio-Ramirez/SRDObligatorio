@@ -53,6 +53,22 @@
     enabled: true
     state: started
 
+# Amazon Linux does not ship firewalld enabled: the module needs a running daemon.
+- name: Web | Check whether firewalld is running
+  ansible.builtin.command: firewall-cmd --state
+  register: vulnmgmt_firewalld
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Web | Warn when there is no firewalld to open the dashboard port
+  ansible.builtin.debug:
+    msg: >-
+      firewalld is not running on this server: the dashboard port {{ vulnmgmt_web_port }}/tcp was NOT opened.
+      Open it with the firewall in use (iptables / nftables / cloud security group) if the panel must be
+      reachable from other hosts.
+  when: vulnmgmt_firewalld.rc != 0
+
 - name: Web | Allow the dashboard port from the administration networks
   ansible.posix.firewalld:
     zone: "{{ vulnmgmt_firewall_zone }}"
@@ -63,6 +79,7 @@
     immediate: true
     state: enabled
   loop: "{{ vulnmgmt_allowed_networks }}"
+  when: vulnmgmt_firewalld.rc == 0
 
 - name: Web | Allow the dashboard port from any network
   ansible.posix.firewalld:
@@ -71,3 +88,4 @@
     permanent: true
     immediate: true
     state: "{{ 'enabled' if vulnmgmt_allowed_networks | length == 0 else 'disabled' }}"
+  when: vulnmgmt_firewalld.rc == 0

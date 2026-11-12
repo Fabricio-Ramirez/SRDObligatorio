@@ -347,6 +347,11 @@ Plataforma instalada **sólo en el servidor Wazuh** y alojada en él. Documentac
 sudo ./bootstrap.sh --component vulnmgmt
 ```
 
+**Sistema operativo:** cada componente valida el suyo. El **hardening** sólo corre en Rocky Linux 9/10 (benchmarks CIS de
+Rocky/RHEL); la **plataforma de vulnerabilidades** corre en Rocky Linux 9/10 o **Amazon Linux 2023** (el sistema del
+servidor Wazuh). En Amazon Linux 2023 `bootstrap.sh` instala `ansible-core` en un entorno virtual si la distribución no
+lo empaqueta. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#3-requisitos-previos).
+
 | Requisito | Cómo se cumple |
 |---|---|
 | Gestionar vulnerabilidades y actualizaciones | Lee los hallazgos de todos los agentes desde el indexer de Wazuh (≥ 4.8) y genera una acción por paquete: actualizar (con el comando exacto y aviso de reinicio), mitigar o revisar. |
@@ -356,7 +361,7 @@ sudo ./bootstrap.sh --component vulnmgmt
 | IA (valor agregado) | Modelo local y gratuito (Ollama + Qwen2.5 1.5B/0.5B) que redacta el resumen ejecutivo y notas, limitado en CPU/RAM y con respaldo por reglas. |
 | No-code (valor agregado) | n8n Community Edition con un flujo semanal que avisa a infraestructura las acciones P1/P2. |
 
-Antes de endurecer el servidor Wazuh, copiar `host_vars/srv-siem.yml.example` (conserva `nginx`, que CIS 2.1.18 desinstalaría).
+Si el servidor Wazuh es Rocky y se endurece, copiar antes `host_vars/srv-siem.yml.example` (conserva `nginx`, que CIS 2.1.18 desinstalaría). Si es Amazon Linux, la plantilla de endurecimiento no le aplica.
 
 ## 13. Uso de IA generativa
 

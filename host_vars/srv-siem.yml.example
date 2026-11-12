@@ -1,4 +1,8 @@
 ---
+# ONLY for a Wazuh server running Rocky Linux 9/10. The hardening follows the CIS Rocky/RHEL
+# benchmarks and does not run on Amazon Linux (bootstrap.sh rejects it); the vulnerability
+# platform (vulnmgmt.yml) does support Amazon Linux 2023.
+#
 # Example host_vars for the Wazuh server (all-in-one: manager + indexer +
 # dashboard) that also hosts the vulnerability management platform
 # (vulnmgmt.yml). Rename to host_vars/<inventory_hostname>.yml
