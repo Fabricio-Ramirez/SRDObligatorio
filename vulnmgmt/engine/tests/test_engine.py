@@ -9,7 +9,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from vulnmgmt import ai, demo, intel, prioritize, publish, remediation, wazuh
+from vulnmgmt import analysis, demo, intel, prioritize, publish, remediation, wazuh
 
 
 class FakeServer:
@@ -117,7 +117,7 @@ class ScoringTests(unittest.TestCase):
 class PublishTests(unittest.TestCase):
     def test_csv_injection_is_neutralised(self):
         acts, _, _ = prioritize.analyse([finding(pkg="=cmd|calc")], {}, {}, {}, None, {})
-        text = publish.actionables_csv(acts, {})
+        text = publish.actionables_csv(acts)
         self.assertIn(";'=cmd|calc;", text)
 
     def test_outputs_and_siem_events(self):
@@ -128,7 +128,7 @@ class PublishTests(unittest.TestCase):
             acts, hosts, kpis = prioritize.analyse(demo.findings(), demo.DEMO_KEV, demo.DEMO_EPSS,
                                                    {}, None, state)
             report = {"generated_at": "2026-01-01T00:00:00", "kpis": kpis, "actionables": acts,
-                      "hosts": hosts, "ai": {"source": "reglas", "notes": {}}}
+                      "hosts": hosts, "analysis": analysis.summarise(acts, kpis)}
             publish.write_outputs(cfg, report, state)
             for name in ("latest.json", "history.json", "actionables.csv", "remediation.yml",
                          "reports/2026-01-01.json"):
@@ -263,70 +263,69 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(prioritize.commands_for("openssl", "rpm", "3.0")["remediation"], "sudo dnf upgrade -y openssl")
 
 
-class AITests(unittest.TestCase):
+class AnalysisTests(unittest.TestCase):
+    """The summary replaced the local LLM: same input must give the same text."""
+
     def setUp(self):
         self.acts, _, self.kpis = prioritize.analyse(demo.findings(), demo.DEMO_KEV, demo.DEMO_EPSS,
                                                      {}, None, {})
 
-    def test_choose_model_by_memory(self):
-        models = [{"name": "big", "min_free_mb": 1800}, {"name": "small", "min_free_mb": 900}]
-        self.assertEqual(ai.choose_model(models, {"big", "small"}, 4000), "big")
-        self.assertEqual(ai.choose_model(models, {"big", "small"}, 1000), "small")
-        self.assertIsNone(ai.choose_model(models, {"big", "small"}, 500))
-        self.assertEqual(ai.choose_model(models, {"small"}, 4000), "small")
-
-    def test_validate_drops_unknown_ids_and_bounds_text(self):
-        out = ai.validate({"resumen_ejecutivo": "x" * 5000, "riesgos_clave": ["a"],
-                           "acciones": [{"id": "VM-1", "nota": "ok"}, {"id": "BAD", "nota": "no"}],
-                           "ventana_mantenimiento": "w"}, {"VM-1"})
-        self.assertEqual(len(out["summary"]), 1500)
-        self.assertEqual(out["notes"], {"VM-1": "ok"})
-        with self.assertRaises(ValueError):
-            ai.validate({"resumen_ejecutivo": ""}, set())
-
-    def test_ollama_round_trip(self):
-        first_id = self.acts[0]["id"]
-        answer = {"resumen_ejecutivo": "Resumen.", "riesgos_clave": ["r1"],
-                  "acciones": [{"id": first_id, "nota": "Actualizar primero."}],
-                  "ventana_mantenimiento": "Domingo 02:00."}
-
-        def route(method, path, body):
-            if path == "/api/tags":
-                return 200, {"models": [{"name": "qwen2.5:1.5b"}, {"name": "qwen2.5:0.5b"}]}
-            if path == "/api/generate":
-                return 200, {"model": body["model"], "response": json.dumps(answer), "done": True}
-            return 404, {}
-
-        srv = FakeServer(route)
-        try:
-            status = {"warnings": []}
-            cfg = {"url": srv.url, "models": [{"name": "qwen2.5:1.5b", "min_free_mb": 0}]}
-            out = ai.analyse(cfg, self.acts, self.kpis, status)
-        finally:
-            srv.close()
-        self.assertEqual(out["source"], "ia-local")
-        self.assertEqual(out["notes"], {first_id: "Actualizar primero."})
-        body = srv.requests[-1][2]
-        self.assertEqual(body["keep_alive"], 0)                              # unloads the model
-        self.assertFalse(body["stream"])
-        self.assertEqual(body["format"]["required"], ai.SCHEMA["required"])
-        self.assertNotIn("srv-backup", body["prompt"])                       # only task data is sent
-
-    def test_fallback_on_bad_answer(self):
-        def route(method, path, body):
-            if path == "/api/tags":
-                return 200, {"models": [{"name": "m"}]}
-            return 200, {"response": "not json"}
-
-        srv = FakeServer(route)
-        try:
-            status = {"warnings": []}
-            out = ai.analyse({"url": srv.url, "models": [{"name": "m"}]}, self.acts, self.kpis, status)
-        finally:
-            srv.close()
+    def test_summary_reports_the_real_numbers(self):
+        out = analysis.summarise(self.acts, self.kpis)
         self.assertEqual(out["source"], "reglas")
-        self.assertTrue(out["summary"])
-        self.assertTrue(status["warnings"])
+        self.assertIn(str(self.kpis["unique_cves"]), out["summary"])
+        self.assertIn(str(self.kpis["actions"]["P1"]), out["summary"])
+        self.assertIn("KEV", out["summary"])                                 # the demo data has KEV
+        self.assertTrue(out["risks"])
+        self.assertLessEqual(len(out["risks"]), 4)
+        self.assertIn("kernel", out["maintenance_window"])                   # needs a reboot
+
+    def test_is_deterministic_and_needs_no_network(self):
+        self.assertEqual(analysis.summarise(self.acts, self.kpis),
+                         analysis.summarise(self.acts, self.kpis))
+
+    def test_empty_report_does_not_crash(self):
+        acts, _, kpis = prioritize.analyse([], {}, {}, {}, None, {})
+        out = analysis.summarise(acts, kpis)
+        self.assertIn("No hay acciones", out["summary"])
+        self.assertEqual(out["risks"], [])
+
+
+class WorkflowTests(unittest.TestCase):
+    """The n8n script builds the prioritised plan; it must stay reviewable."""
+
+    SCRIPT = os.path.join(os.path.dirname(__file__), "..", "..", "n8n", "priorizar-soluciones.js")
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(cls.SCRIPT):
+            raise AssertionError("missing n8n script: %s" % cls.SCRIPT)
+        with open(cls.SCRIPT, encoding="utf-8") as fh:
+            cls.code = fh.read()
+
+    # assertIn/assertNotIn would dump the whole script into the failure message.
+    def _has(self, needle, why):
+        self.assertTrue(needle in self.code, "%r not found in the script: %s" % (needle, why))
+
+    def _lacks(self, needle, why):
+        self.assertFalse(needle in self.code, "%r found in the script: %s" % (needle, why))
+
+    def test_reuses_the_commands_published_by_the_engine(self):
+        self._has("a.commands", "the commands must be read from the report")
+        self._has("remediation", "the remediation command must come from the engine")
+        self._has("verification", "the verification command must come from the engine")
+
+    def test_never_builds_a_command_of_its_own(self):
+        """Package names come from the indexer: only the engine may interpolate them."""
+        for forbidden in ("dnf upgrade", "dnf install", "apt-get install", "pip install",
+                          "npm install", "rpm -q"):
+            self._lacks(forbidden, "the script must not build commands itself")
+
+    def test_does_not_recalculate_the_priority(self):
+        """P1-P4 come from prioritize.py; the script only orders within them."""
+        for forbidden in ("thresholds", "weights", "criticality:", "sla_days["):
+            self._lacks(forbidden, "the score must not be recomputed here")
+        self._has("ORDEN_PRIORIDAD[a.priority]", "the engine's priority must drive the ordering")
 
 
 class SourceTests(unittest.TestCase):

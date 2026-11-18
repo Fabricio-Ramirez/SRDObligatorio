@@ -1,0 +1,66 @@
+---
+# Removes the local AI (Ollama) that earlier versions of this role installed.
+#
+# The summary is now written by the engine (analysis.py) and the prioritised
+# plan with the proposed solutions by the n8n script, so nothing needs a
+# language model any more. On a VM shared with Wazuh, leaving the service
+# running would keep reserving memory for no reason.
+#
+# Nothing irreplaceable is deleted: the binary is a pinned release and the
+# models are public downloads. Set vulnmgmt_remove_ollama=false to keep them.
+
+- name: Ollama cleanup | Check whether the service is installed
+  ansible.builtin.stat:
+    path: /etc/systemd/system/ollama.service
+  register: vulnmgmt_ollama_unit
+
+- name: Ollama cleanup | Stop and disable the service
+  ansible.builtin.systemd:
+    name: ollama
+    state: stopped
+    enabled: false
+  when: vulnmgmt_ollama_unit.stat.exists
+  failed_when: false
+
+- name: Ollama cleanup | Remove the systemd unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/ollama.service
+    state: absent
+
+- name: Ollama cleanup | Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: vulnmgmt_ollama_unit.stat.exists
+
+# /usr/share/ollama holds the downloaded models (about 1.5 GB).
+- name: Ollama cleanup | Remove the binary, the libraries and the models
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/local/bin/ollama
+    - /usr/local/lib/ollama
+    - /usr/share/ollama
+  loop_control:
+    label: "{{ item }}"
+
+- name: Ollama cleanup | Remove the cached release tarballs
+  ansible.builtin.find:
+    paths: /var/cache/vulnmgmt
+    patterns: "ollama-*.tar.zst"
+  register: vulnmgmt_ollama_cache
+
+- name: Ollama cleanup | Delete the cached release tarballs
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ vulnmgmt_ollama_cache.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Ollama cleanup | Remove the service account
+  ansible.builtin.user:
+    name: ollama
+    state: absent
+    remove: false
+  failed_when: false

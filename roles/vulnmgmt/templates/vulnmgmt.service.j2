@@ -1,7 +1,7 @@
 # {{ vulnmgmt_managed_comment }}
 [Unit]
-Description=Vulnerability management engine (Wazuh + KEV/EPSS + local AI)
-After=network-online.target wazuh-indexer.service ollama.service
+Description=Vulnerability management engine (Wazuh + KEV/EPSS prioritisation)
+After=network-online.target wazuh-indexer.service
 Wants=network-online.target
 
 [Service]

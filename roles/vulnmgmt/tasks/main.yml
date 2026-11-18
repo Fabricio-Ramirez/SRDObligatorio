@@ -15,10 +15,10 @@
   ansible.builtin.import_tasks: config.yml
   tags: [config]
 
-- name: Local AI (Ollama)
-  ansible.builtin.import_tasks: ollama.yml
-  when: vulnmgmt_ai_enabled | bool
-  tags: [ai]
+- name: Remove the old local AI (Ollama)
+  ansible.builtin.import_tasks: ollama_cleanup.yml
+  when: vulnmgmt_remove_ollama | bool
+  tags: [ollama-cleanup]
 
 - name: Web dashboard (nginx)
   ansible.builtin.import_tasks: web.yml

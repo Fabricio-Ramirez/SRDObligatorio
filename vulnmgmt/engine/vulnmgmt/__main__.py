@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import __version__, ai, demo, intel, prioritize, publish, remediation, wazuh
+from . import __version__, analysis, demo, intel, prioritize, publish, remediation, wazuh
 from .httpclient import HTTPError
 
 log = logging.getLogger("vulnmgmt")
@@ -51,7 +51,6 @@ def run(cfg, use_demo=False):
                                                   if f.get("vulnerability.id")}, status)
 
     actionables, hosts, kpis = prioritize.analyse(findings, kev, epss, agents, cfg.get("scoring"), state)
-    ai_section = ai.analyse(cfg.get("ai", {}), actionables, kpis, status)
     report = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "engine_version": __version__,
@@ -59,7 +58,9 @@ def run(cfg, use_demo=False):
         "kpis": kpis,
         "actionables": actionables,
         "hosts": hosts,
-        "ai": ai_section,
+        # Short summary for the panel. The prioritised work plan with the
+        # proposed solution per action is built by the n8n workflow.
+        "analysis": analysis.summarise(actionables, kpis),
         "remediation": remediation.build(actionables),
         "intel": {"kev": status["kev"], "epss": status["epss"]},
         "scoring": prioritize.merge_scoring(cfg.get("scoring")),
@@ -67,9 +68,8 @@ def run(cfg, use_demo=False):
     }
     publish.write_outputs(out, report, state, state_name)
     sent = publish.siem_events(out, report, previous_ids) if not use_demo else 0
-    log.info("Report: %d findings, %d actions (P1=%d P2=%d), AI=%s, SIEM events=%d",
-             kpis["findings"], len(actionables), kpis["actions"]["P1"], kpis["actions"]["P2"],
-             ai_section["source"], sent)
+    log.info("Report: %d findings, %d actions (P1=%d P2=%d), SIEM events=%d",
+             kpis["findings"], len(actionables), kpis["actions"]["P1"], kpis["actions"]["P2"], sent)
     for warning in status["warnings"]:
         log.warning(warning)
     return report

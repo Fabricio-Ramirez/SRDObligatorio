@@ -53,12 +53,10 @@
       vulnmgmt_indexer_create_reader=false with vulnmgmt_indexer_user/password.
     quiet: true
 
-- name: Preflight | Report a VM that is small for the local AI
+- name: Preflight | Report a VM that is small for Wazuh all-in-one
   ansible.builtin.debug:
     msg: >-
-      This server has {{ ansible_facts['memtotal_mb'] }} MB of RAM. Wazuh all-in-one needs about 8 GB;
-      the local AI adds 1-2 GB while it runs. The engine skips the AI automatically when there is not
-      enough free memory, or disable it with -e vulnmgmt_ai_enabled=false.
-  when:
-    - vulnmgmt_ai_enabled | bool
-    - ansible_facts['memtotal_mb'] < 9000
+      This server has {{ ansible_facts['memtotal_mb'] }} MB of RAM. Wazuh all-in-one needs about 8 GB.
+      The engine itself is limited to {{ vulnmgmt_engine_memory_max }} and n8n to
+      {{ vulnmgmt_n8n_memory_max }}; install without n8n with -e vulnmgmt_n8n_enabled=false.
+  when: ansible_facts['memtotal_mb'] < 9000

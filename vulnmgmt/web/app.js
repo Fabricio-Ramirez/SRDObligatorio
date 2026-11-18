@@ -1,6 +1,6 @@
 /* Dashboard for the vulnerability management engine.
  * All text from the data files is inserted with textContent (never innerHTML),
- * so CVE references, host names or AI output cannot inject markup. */
+ * so CVE references, package names or host names cannot inject markup. */
 "use strict";
 
 const SEV = [
@@ -83,22 +83,17 @@ function renderKpis(k) {
   }));
 }
 
-function renderAI(ai) {
-  const badge = document.getElementById("ai-badge");
-  if (ai.source === "ia-local") {
-    badge.textContent = `IA local · ${ai.model} · ${ai.duration_s} s`;
-    badge.className = "badge ai";
-  } else {
-    badge.textContent = "Resumen por reglas (IA no disponible)";
-    badge.className = "badge";
-  }
-  document.getElementById("ai-summary").textContent = ai.summary || "";
-  document.getElementById("ai-risks").replaceChildren(...(ai.risks || []).map((r) => el("li", { text: r })));
-  document.getElementById("ai-window").textContent = ai.maintenance_window || "";
-  document.getElementById("ai-note").textContent = ai.source === "ia-local"
-    ? "Texto generado por un modelo de lenguaje local en el propio servidor (sin enviar datos fuera). " +
-      "Es una ayuda: revisarlo antes de actuar. Las prioridades no dependen de la IA."
-    : "";
+function renderAnalysis(analysis) {
+  const a = analysis || {};
+  const badge = document.getElementById("analysis-badge");
+  badge.textContent = "Resumen determinístico";
+  badge.className = "badge";
+  document.getElementById("analysis-summary").textContent = a.summary || "";
+  document.getElementById("analysis-risks").replaceChildren(...(a.risks || []).map((r) => el("li", { text: r })));
+  document.getElementById("analysis-window").textContent = a.maintenance_window || "";
+  document.getElementById("analysis-note").textContent =
+    "Texto calculado a partir de los datos del informe: mismas entradas, mismo resultado, sin modelos de lenguaje. " +
+    "El plan de trabajo ordenado, con la solución propuesta para cada acción, lo arma el flujo de n8n a partir de este mismo informe.";
 }
 
 function renderFilters() {
@@ -142,7 +137,6 @@ function copyButton(text) {
 }
 
 function detailRow(a) {
-  const notes = (state.report.ai.notes || {})[a.id];
   const cveRows = a.cves.map((c) => el("tr", {},
     el("td", {}, safeCve(c.id)
       ? el("a", { href: `https://nvd.nist.gov/vuln/detail/${c.id}`, target: "_blank", rel: "noopener noreferrer", text: c.id })
@@ -163,7 +157,6 @@ function detailRow(a) {
         el("h3", { text: "Servidores" }),
         el("p", { text: a.hosts.map((h) => `${h.name} (criticidad ${h.criticality})`).join(", ") }),
         a.reboot_required ? el("p", { class: "overdue", text: "Requiere reinicio del servidor." }) : null,
-        notes ? el("div", {}, el("h3", { text: "Nota de la IA local" }), el("p", { text: notes })) : null,
       ),
       el("div", {},
         el("h3", { text: "Remediación" }), el("pre", { text: a.commands.remediation }), copyButton(a.commands.remediation),
@@ -320,7 +313,7 @@ async function main() {
   const r = state.report;
   renderMeta(r);
   renderKpis(r.kpis);
-  renderAI(r.ai);
+  renderAnalysis(r.analysis);
   renderFilters();
   renderActions();
   renderRemediation(r.remediation);

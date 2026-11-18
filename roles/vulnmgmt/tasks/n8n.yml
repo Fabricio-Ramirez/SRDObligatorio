@@ -41,13 +41,17 @@
     mode: "0644"
   notify: Restart n8n
 
-- name: n8n | Copy the workflow to import
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/vulnmgmt/n8n/vulnmgmt-workflow.json"
+# The flow embeds the prioritisation script (vulnmgmt/n8n/priorizar-soluciones.js),
+# so the rendered file changes whenever that script changes - which is exactly
+# when the workflow has to be imported again.
+- name: n8n | Render the workflow with the prioritisation script
+  ansible.builtin.template:
+    src: vulnmgmt-workflow.json.j2
     dest: /var/lib/n8n/import/vulnmgmt-workflow.json
     owner: "1000"
     group: "1000"
     mode: "0600"
+  register: vulnmgmt_n8n_workflow
 
 - name: n8n | Install the container (Podman Quadlet)
   ansible.builtin.template:
@@ -74,15 +78,40 @@
   delay: 10
   until: vulnmgmt_n8n_health.status == 200
 
-- name: n8n | Import the vulnerability workflow (once)
+# The workflow carries a fixed id ("vulnmgmtWeekly01"), so importing it again
+# updates the existing flow instead of leaving a duplicate behind. Changes made
+# by hand in the editor are overwritten: the repository is the source of truth.
+#
+# The marker is named after the checksum of the rendered file, so the import
+# runs once per version *and* is retried on the next run if it failed: the
+# marker is only written after the import succeeds.
+- name: n8n | Import the vulnerability workflow (once per version, retried on failure)
   ansible.builtin.command: podman exec n8n n8n import:workflow --input=/home/node/.n8n/import/vulnmgmt-workflow.json
   args:
-    creates: /var/lib/n8n/import/.imported
+    creates: "/var/lib/n8n/import/.imported-{{ vulnmgmt_n8n_workflow.checksum | default('unknown') }}"
 
-- name: n8n | Remember that the workflow was imported
+- name: n8n | Remember which version of the workflow was imported
   ansible.builtin.copy:
-    dest: /var/lib/n8n/import/.imported
+    dest: "/var/lib/n8n/import/.imported-{{ vulnmgmt_n8n_workflow.checksum | default('unknown') }}"
     content: "imported\n"
     owner: "1000"
     group: "1000"
     mode: "0600"
+
+- name: n8n | List the import markers
+  ansible.builtin.find:
+    paths: /var/lib/n8n/import
+    patterns: ".imported*"
+    hidden: true
+  register: vulnmgmt_n8n_markers
+
+# Leaves only the marker of the version just imported (this also removes the
+# ".imported" marker that earlier versions of this role used).
+- name: n8n | Drop the markers of previous versions
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ vulnmgmt_n8n_markers.files }}"
+  when: (item.path | basename) != ('.imported-' ~ (vulnmgmt_n8n_workflow.checksum | default('unknown')))
+  loop_control:
+    label: "{{ item.path }}"

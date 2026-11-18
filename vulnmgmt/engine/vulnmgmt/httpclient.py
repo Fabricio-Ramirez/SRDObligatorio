@@ -27,8 +27,8 @@ def ssl_context(verify=True, ca_file=None):
 class Client:
     """Small JSON client.
 
-    local=True ignores proxy environment variables: Wazuh, the indexer and
-    Ollama run on the same server and must never be reached through a proxy.
+    local=True ignores proxy environment variables: Wazuh and the indexer run
+    on the same server and must never be reached through a proxy.
     """
 
     def __init__(self, base_url, verify=True, ca_file=None, timeout=30,

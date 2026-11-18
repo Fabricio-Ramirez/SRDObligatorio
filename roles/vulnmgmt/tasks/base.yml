@@ -1,7 +1,7 @@
 ---
 - name: Base | Install the required packages
   ansible.builtin.dnf:
-    name: "{{ ['python3', 'nginx', 'openssl', 'tar', 'zstd', 'logrotate'] + (['podman'] if vulnmgmt_n8n_enabled | bool else []) }}"
+    name: "{{ ['python3', 'nginx', 'openssl', 'tar', 'logrotate'] + (['podman'] if vulnmgmt_n8n_enabled | bool else []) }}"
     state: present
 
 - name: Base | Create the vulnmgmt service account

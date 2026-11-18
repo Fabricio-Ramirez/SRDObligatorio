@@ -8,8 +8,8 @@ estandarizado, automatizado (Ansible) y replicable en cada despliegue para endur
 GNU/Linux base de la infraestructura, tomando como referencia **CIS Benchmark Nivel 1**.
 
 También incluye el punto **5. "Gestión de Vulnerabilidades"**: una plataforma que se instala sólo en el servidor
-Wazuh (`sudo ./bootstrap.sh --component vulnmgmt`), con panel web propio, priorización CVSS + EPSS + CISA KEV,
-IA local (Ollama) y flujos no-code (n8n). Ver [12. Gestión de vulnerabilidades](#12-gestión-de-vulnerabilidades-punto-5)
+Wazuh (`sudo ./bootstrap.sh --component vulnmgmt`), con panel web propio, priorización CVSS + EPSS + CISA KEV
+y flujos no-code (n8n) que arman el plan de remediación priorizado. Ver [12. Gestión de vulnerabilidades](#12-gestión-de-vulnerabilidades-punto-5)
 y la documentación completa en [`docs/vulnmgmt.md`](docs/vulnmgmt.md).
 
 ## Índice
@@ -230,7 +230,17 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
         └── summary.yml          # Reporte: reinicio pendiente y puntos a revisar
     roles/hardening_rocky10/     # Misma estructura, adaptada a CIS RHEL 10 v1.0.1
 
-vulnmgmt.yml, roles/vulnmgmt/, vulnmgmt/, docs/vulnmgmt.md   # Punto 5 (ver sección 12)
+Punto 5 — Gestión de vulnerabilidades (ver sección 12 y docs/vulnmgmt.md)
+├── vulnmgmt.yml                 # Playbook (grupo wazuh_server)
+├── roles/vulnmgmt/              # Rol de instalación
+│   ├── tasks/ollama_cleanup.yml #   Desinstala la IA local de versiones anteriores
+│   ├── tasks/n8n.yml            #   n8n (Podman) e importación del flujo
+│   └── templates/vulnmgmt-workflow.json.j2  # Flujo de n8n (incrusta el script de abajo)
+├── vulnmgmt/engine/vulnmgmt/    # Motor Python (KEV/EPSS, prioridad P1-P4, SLA, remediación)
+├── vulnmgmt/web/                # Panel web (HTML + JS + CSS, sin dependencias)
+├── vulnmgmt/wazuh/              # Reglas del SIEM (100800-100808)
+├── vulnmgmt/n8n/priorizar-soluciones.js     # Script no-code: triaje y soluciones propuestas
+└── vulnmgmt/n8n/tests/          # Pruebas del script con Node (ver su README)
 ```
 
 ## 7. Controles CIS implementados
@@ -358,10 +368,26 @@ lo empaqueta. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#3-requisitos-previos).
 | Informes periódicos | Temporizador diario (03:30) y también **en caliente** con `sudo systemctl start vulnmgmt.service` (ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#generar-el-informe-en-caliente)): panel web HTTPS en `https://<servidor-wazuh>:8443`, CSV, histórico y alertas en Wazuh (reglas 100800-100808). |
 | Acciones priorizadas y viables | Riesgo con CVSS + EPSS + CISA KEV + criticidad del servidor; prioridad P1-P4 con plazo (SLA), seguimiento de vencidas, escaladas y resueltas. |
 | **Resolver las vulnerabilidades (remediación)** | Por servidor, comandos listos para copiar (`sudo dnf upgrade -y --disablerepo='wazuh*' <paquetes>`) y un playbook de Ansible (`remediation.yml`) con simulación previa (`--check --diff`), filtro por prioridad (`--tags P1`) y aviso de reinicio. La plataforma **no ejecuta nada**: lo aplica el equipo desde el bastión. Los componentes de Wazuh, las acciones sin parche y los gestores no soportados quedan como trabajo manual. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#6-remediación-de-las-vulnerabilidades). |
-| IA (valor agregado) | Modelo local y gratuito (Ollama + Qwen2.5 1.5B/0.5B) que redacta el resumen ejecutivo y notas, limitado en CPU/RAM y con respaldo por reglas. |
-| No-code (valor agregado) | n8n Community Edition con un flujo semanal que avisa a infraestructura las acciones P1/P2. |
+| No-code (valor agregado) | n8n Community Edition con un flujo semanal: un **script determinístico** (nodo *Code*) ordena las acciones por urgencia, propone la solución y la verificación de cada una, las agrupa en ventanas de mantenimiento y arma el aviso para infraestructura. Reemplaza a la IA local (Ollama) que usaban versiones anteriores. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#9-flujo-no-code-n8n). |
+| Explicabilidad | La priorización y los textos salen de código auditable: las mismas entradas dan siempre el mismo resultado, sin modelos de lenguaje. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#8-sin-ia-local-qué-cambió-y-por-qué). |
 
 **Decisión del equipo: el servidor Wazuh no se endurece con la plantilla del punto 1**; ahí sólo se instala esta plataforma. Detalle y consecuencias en [`docs/vulnmgmt.md`](docs/vulnmgmt.md#relación-con-el-endurecimiento-punto-1).
+
+### Si ya tenías la plataforma instalada (quita de la IA local)
+
+Versiones anteriores instalaban un modelo de lenguaje local (**Ollama** + Qwen2.5) para redactar el resumen.
+Ese modelo se quitó: ahora el plan priorizado lo arma el script de n8n y el resumen lo calcula el motor.
+
+Al volver a ejecutar el rol, **se desinstala Ollama**: el servicio, el binario y los modelos descargados
+(≈ 1,5 GB en `/usr/share/ollama`). No se pierde nada irrecuperable —es una *release* pública y los modelos
+se vuelven a descargar—, pero es un cambio con efecto en el servidor. Para conservar la instalación:
+
+```bash
+sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_remove_ollama=false
+```
+
+Después de actualizar conviene generar un informe (`sudo systemctl start vulnmgmt.service`) para que el panel
+tome el formato nuevo. Detalle completo en [`docs/vulnmgmt.md`](docs/vulnmgmt.md#8-sin-ia-local-qué-cambió-y-por-qué).
 
 ## 13. Uso de IA generativa
 
@@ -371,6 +397,9 @@ Según las pautas del obligatorio:
 - **Contexto de uso:** generación del código Ansible y de los scripts, redacción de esta documentación y
   contraste de los controles contra fuentes públicas (CIS vía ComplianceAsCode, código fuente de OpenSSH, audit,
   authselect, rsyslog y dnf).
+- **Alcance:** la IA se usó para **construir** el proyecto, no forma parte de lo que se entrega en ejecución.
+  Lo que queda instalado en los servidores es código determinístico: ni la plantilla de endurecimiento ni la
+  plataforma de vulnerabilidades ejecutan modelos de lenguaje (ver la fila *Explicabilidad* de la sección 12).
 - **Verificación:** el equipo debe revisar el contenido y validarlo en la maqueta (ver sección 11).
 
 ## 14. Referencias
@@ -383,5 +412,5 @@ Según las pautas del obligatorio:
 - FIRST — EPSS (*Exploit Prediction Scoring System*): <https://www.first.org/epss/>
 - CISA — *Known Exploited Vulnerabilities Catalog*: <https://www.cisa.gov/known-exploited-vulnerabilities-catalog>
 - Wazuh — detección de vulnerabilidades: <https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html>
-- Ollama: <https://github.com/ollama/ollama> · n8n Community Edition: <https://github.com/n8n-io/n8n>
+- n8n Community Edition: <https://github.com/n8n-io/n8n> · nodo *Code*: <https://docs.n8n.io/code/code-node/>
 

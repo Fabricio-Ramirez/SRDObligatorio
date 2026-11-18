@@ -48,7 +48,6 @@ main { max-width: 1280px; margin: 0 auto; padding: 0 1rem 2rem; display: grid; g
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
 .cols ul { margin: 0; padding-left: 1.1rem; }
 .badge { font-size: .8rem; padding: .15rem .55rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
-.badge.ai { border-color: var(--ok); color: var(--ok); }
 .downloads a { margin-left: .75rem; font-size: .9rem; }
 .filters { display: flex; flex-wrap: wrap; gap: .75rem 1.25rem; align-items: end; margin-bottom: .75rem; }
 .filters fieldset { border: 0; padding: 0; margin: 0; display: flex; gap: .4rem; align-items: center; }

@@ -10,7 +10,7 @@ from . import remediation
 
 CSV_FIELDS = ["id", "priority", "risk", "action", "package", "package_type", "fixed_version",
               "hosts", "cves", "kev_count", "max_cvss", "max_epss", "reboot_required",
-              "first_seen", "due_date", "overdue", "remediation", "verification", "ai_note"]
+              "first_seen", "due_date", "overdue", "remediation", "verification"]
 
 
 def atomic_write(path, text, mode=0o644):
@@ -35,7 +35,7 @@ def _cell(value):
     return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
 
 
-def actionables_csv(actionables, notes):
+def actionables_csv(actionables):
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";")
     writer.writerow(CSV_FIELDS)
@@ -46,7 +46,6 @@ def actionables_csv(actionables, notes):
             "cves": ", ".join(c["id"] for c in a["cves"]),
             "remediation": a["commands"]["remediation"],
             "verification": a["commands"]["verification"],
-            "ai_note": notes.get(a["id"], ""),
         }
         writer.writerow([_cell(row.get(f)) for f in CSV_FIELDS])
     return "﻿" + buf.getvalue()  # BOM so Excel opens the accents correctly
@@ -66,8 +65,7 @@ def write_outputs(cfg, report, state, state_name="state.json"):
     plan = report.get("remediation") or remediation.build(report["actionables"])
     atomic_write(os.path.join(out, remediation.PLAYBOOK_NAME),
                  remediation.playbook(plan, report["generated_at"], report.get("source", "wazuh")))
-    atomic_write(os.path.join(out, "actionables.csv"),
-                 actionables_csv(report["actionables"], report["ai"].get("notes", {})))
+    atomic_write(os.path.join(out, "actionables.csv"), actionables_csv(report["actionables"]))
 
     reports = sorted(f for f in os.listdir(os.path.join(out, "reports")) if f.endswith(".json"))
     keep = int(cfg.get("history_runs", 90))
@@ -98,7 +96,7 @@ def siem_events(cfg, report, previous_ids):
     k = report["kpis"]
     lines = [{"vulnmgmt": {"event": "summary", "timestamp": now, "unique_cves": k["unique_cves"],
                            "kev": k["kev"], "p1": k["actions"]["P1"], "p2": k["actions"]["P2"],
-                           "overdue": k["overdue"], "ai_source": report["ai"]["source"]}}]
+                           "overdue": k["overdue"]}}]
     for a in report["actionables"]:
         if a["priority"] not in wanted:
             continue

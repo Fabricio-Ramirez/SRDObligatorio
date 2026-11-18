@@ -57,22 +57,14 @@ vulnmgmt_scoring:
     hosts: {}                    # e.g. {srv-idp: alta}
     groups: {}                   # Wazuh agent groups, e.g. {criticos: alta}
 
-# --- Local AI (Ollama) - tuned for a small VM ----------------------------------
-vulnmgmt_ai_enabled: true
-vulnmgmt_ollama_version: "0.40.13"
-vulnmgmt_ollama_release_url: "https://github.com/ollama/ollama/releases/download/v{{ vulnmgmt_ollama_version }}"
-# Tried in order; the first one installed that fits in the free RAM is used.
-vulnmgmt_ai_models:
-  - {name: "qwen2.5:1.5b", min_free_mb: 1800}
-  - {name: "qwen2.5:0.5b", min_free_mb: 900}
-vulnmgmt_ai_max_actions: 8         # tasks sent to the model per run
-vulnmgmt_ai_num_ctx: 4096
-vulnmgmt_ai_num_predict: 900
-vulnmgmt_ai_threads: 0             # 0 = CPUs - 1 (max 4)
-vulnmgmt_ai_timeout: 900           # seconds (CPU inference is slow)
-# systemd limits so the model never starves the Wazuh indexer/manager.
-vulnmgmt_ollama_memory_max: 3G
-vulnmgmt_ollama_cpu_quota: 200%
+# --- Removal of the old local AI (Ollama) --------------------------------------
+# Earlier versions of this role installed Ollama with a small language model to
+# write the summary. That job is now done by the n8n script
+# (vulnmgmt/n8n/priorizar-soluciones.js) and by the engine's own deterministic
+# summary, so the service and its models (1-2 GB of RAM, ~1.5 GB on disk) are
+# removed from servers where they were installed.
+# Set it to false to leave an existing Ollama installation untouched.
+vulnmgmt_remove_ollama: true
 
 # --- Web dashboard (nginx) -----------------------------------------------------
 vulnmgmt_web_port: 8443
@@ -94,10 +86,19 @@ vulnmgmt_wazuh_rules: true
 vulnmgmt_wazuh_event_priorities: [P1, P2]
 
 # --- No-code workflows (n8n Community Edition, Podman) -------------------------
+# The flow prioritises the actions and proposes a solution for each one with the
+# script in vulnmgmt/n8n/priorizar-soluciones.js (node "Code"), and sends the
+# plan to the infrastructure team.
 vulnmgmt_n8n_enabled: true
 vulnmgmt_n8n_image: docker.io/n8nio/n8n:2.46.4
 vulnmgmt_n8n_timezone: America/Montevideo
 vulnmgmt_n8n_memory_max: 1G
+# Sender/recipient of the notice. The email node ships disabled: it only sends
+# once the SMTP credential is loaded in the n8n editor and the node is enabled.
+vulnmgmt_n8n_mail_from: vulnmgmt@cdg.uy
+vulnmgmt_n8n_mail_to: infraestructura@cdg.uy
+# Link to the panel included in the notice (the flow itself reads 127.0.0.1).
+vulnmgmt_panel_url: "https://{{ ansible_facts['fqdn'] }}:{{ vulnmgmt_web_port }}/"
 
 # --- First run ----------------------------------------------------------------------
 # demo: publish the synthetic demo report when the indexer has no data yet.

@@ -8,8 +8,13 @@ Punto **5. "Gestión de Vulnerabilidades"** del obligatorio de **Seguridad en Re
 > infraestructura. Suma valor el uso de IA y de flujos *no-code*.
 
 Se instala igual que el endurecimiento (*install and play* con `bootstrap.sh` + Ansible), pero **sólo en
-el servidor Wazuh**, y queda alojada en ese mismo servidor. Todo es software libre y gratuito, y la IA
-corre **localmente**, sin APIs pagas ni envío de datos a terceros.
+el servidor Wazuh**, y queda alojada en ese mismo servidor. Todo es software libre y gratuito y corre
+**dentro de la infraestructura**, sin APIs pagas ni envío de datos a terceros.
+
+> **Cambio respecto de versiones anteriores:** la priorización y la propuesta de soluciones ya **no usan
+> un modelo de lenguaje local (Ollama)**. Ahora el plan de trabajo lo arma un **script determinístico
+> dentro de n8n** (sección 9) a partir de las prioridades que calcula el motor (sección 7). El rol
+> **desinstala** Ollama y sus modelos de los servidores donde se habían instalado (sección 8).
 
 ## Índice
 
@@ -20,7 +25,7 @@ corre **localmente**, sin APIs pagas ni envío de datos a terceros.
 5. [Uso diario](#5-uso-diario)
 6. [Remediación de las vulnerabilidades](#6-remediación-de-las-vulnerabilidades)
 7. [Metodología de priorización](#7-metodología-de-priorización)
-8. [IA local optimizada para una VM chica](#8-ia-local-optimizada-para-una-vm-chica)
+8. [Sin IA local: qué cambió y por qué](#8-sin-ia-local-qué-cambió-y-por-qué)
 9. [Flujo no-code (n8n)](#9-flujo-no-code-n8n)
 10. [Alertas en el SIEM](#10-alertas-en-el-siem)
 11. [Seguridad de la propia plataforma](#11-seguridad-de-la-propia-plataforma)
@@ -40,8 +45,8 @@ corre **localmente**, sin APIs pagas ni envío de datos a terceros.
 | Acciones **priorizadas** | Riesgo 0-100 que combina **CVSS** (severidad), **EPSS** (probabilidad de explotación, FIRST), **CISA KEV** (explotadas activamente) y la **criticidad** del servidor. Prioridad P1-P4 con **plazo (SLA)** y seguimiento de acciones **vencidas**, **nuevas**, **escaladas** y **resueltas**. |
 | Acciones **viables** | Una acción por paquete (no una por CVE): servidores afectados, versión objetivo, comandos de remediación y de verificación, aviso de reinicio y ventana de mantenimiento sugerida. |
 | **Remediar** (resolver las vulnerabilidades) | Por cada servidor genera **comandos listos para copiar** y un **playbook de Ansible** (`remediation.yml`) con simulación previa (`--check`), filtro por prioridad y aviso de reinicio. La plataforma **no ejecuta nada** en los servidores: lo aplica el equipo desde el bastión (sección 6). |
-| **IA** (valor agregado) | Modelo de lenguaje **local** (Ollama + Qwen2.5 0.5B/1.5B, licencia Apache 2.0) que redacta el resumen ejecutivo, los riesgos clave y una nota por acción. Afinado para pocos recursos (sección 8). |
-| **No-code** (valor agregado) | **n8n Community Edition** (gratuito, *self-hosted*) con un flujo importado: cada lunes lee el informe, filtra P1/P2 y arma el aviso para infraestructura (correo, Teams, Slack, Telegram… se cambian desde el editor visual). |
+| **No-code** (valor agregado) | **n8n Community Edition** (gratuito, *self-hosted*) con un flujo importado: cada lunes lee el informe y un **script determinístico** ordena las acciones por urgencia, propone la solución y la verificación de cada una, las agrupa en ventanas de mantenimiento y arma el aviso para infraestructura (correo, Teams, Slack, Telegram… se cambian desde el editor visual). Ver sección 9. |
+| Explicabilidad | Toda la priorización y todo el texto del informe salen de **código determinístico y auditable**: las mismas entradas dan siempre el mismo resultado, sin modelos de lenguaje (sección 8). |
 | Integración con el SIEM | Eventos JSON leídos por el propio manager con reglas propias (100800-100808): acciones P1/P2 nuevas o escaladas, KEV y vencidas generan alertas de nivel 10-14. |
 
 ## 2. Arquitectura
@@ -59,13 +64,15 @@ corre **localmente**, sin APIs pagas ni envío de datos a terceros.
    CISA KEV ───────────────────────────────────▶ │  1. recolecta hallazgos y agentes                     │
    FIRST EPSS ─────────────────────────────────▶ │  2. enriquece con KEV + EPSS                          │
                                           │      │  3. agrupa, prioriza (P1-P4), SLA y seguimiento       │
-                                          │      │  4. IA local (Ollama 127.0.0.1:11434) ─ resumen/notas │
+                                          │      │  4. resumen determinístico (analysis.py)              │
                                           │      │  5. publica                                           │
                                           │      ├──▶ /var/www/vulnmgmt/data (JSON, CSV, histórico)      │
                                           │      │        └──▶ nginx :8443 (HTTPS + usuario) ─▶ Panel web│
                                           │      └──▶ /var/log/vulnmgmt/events.json ─▶ reglas Wazuh      │
                                           │                                            (alertas 10-14)   │
-                                          │ n8n 127.0.0.1:5678 (lunes 08:00) ─▶ lee el informe ─▶ aviso  │
+                                          │ n8n 127.0.0.1:5678 (lunes 08:00)                             │
+                                          │   └─▶ lee latest.json ─▶ script "Priorizar y proponer        │
+                                          │        soluciones" ─▶ plan ordenado + ventanas ─▶ aviso      │
                                           └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -74,9 +81,11 @@ Componentes y consumo aproximado:
 | Componente | Cómo corre | Recursos |
 |---|---|---|
 | Motor `vulnmgmt` | Servicio *oneshot* disparado por el temporizador; sólo librería estándar de Python 3.9+ | Máx. 50 % de 1 CPU y 512 MB (`CPUQuota`/`MemoryMax`), prioridad baja |
-| Ollama + modelo | Servicio en 127.0.0.1; el modelo se carga **sólo** durante la ejecución diaria y se descarga al terminar | Máx. 2 CPU y 3 GB; en reposo ≈ 0 de RAM para el modelo |
 | nginx | Sirve archivos estáticos | Mínimo |
-| n8n | Contenedor Podman (Quadlet) en 127.0.0.1 | Máx. 1 GB |
+| n8n | Contenedor Podman (Quadlet) en 127.0.0.1; ejecuta el script de priorización una vez por semana | Máx. 1 GB |
+
+Al no haber modelo de lenguaje, la plataforma dejó de necesitar los 1-2 GB de RAM y los minutos de CPU
+que consumía la inferencia en cada informe (sección 8).
 
 ## 3. Requisitos previos
 
@@ -99,10 +108,10 @@ Componentes y consumo aproximado:
    Se usa **una sola vez** para crear el usuario de sólo lectura `vulnmgmt-reader`; no se guarda.
 4. Opcional: un usuario de la **API de Wazuh** con rol de sólo lectura, para mostrar la cobertura (agentes sin
    hallazgos y agentes desconectados).
-5. **RAM:** Wazuh *all-in-one* necesita unos 8 GB; la IA suma 1-2 GB **sólo mientras corre** el informe. Si no hay
-   memoria libre suficiente el motor usa el modelo más chico o, si tampoco alcanza, el resumen por reglas.
-6. Salida a Internet durante la instalación: `github.com` (Ollama), `registry.ollama.ai` (modelos), `docker.io`
-   (n8n) y los repositorios de la distribución (Rocky o Amazon Linux). En cada informe, opcionalmente, `cisa.gov` o `raw.githubusercontent.com` (KEV)
+5. **RAM:** Wazuh *all-in-one* necesita unos 8 GB. La plataforma agrega poco: el motor está limitado a 512 MB
+   y n8n a 1 GB. Sin n8n (`-e vulnmgmt_n8n_enabled=false`) el agregado es sólo el del motor.
+6. Salida a Internet durante la instalación: `docker.io` (imagen de n8n) y los repositorios de la distribución
+   (Rocky o Amazon Linux). En cada informe, opcionalmente, `cisa.gov` o `raw.githubusercontent.com` (KEV)
    y `api.first.org` (EPSS). Sin Internet la plataforma sigue funcionando con la última caché.
 
 ### Relación con el endurecimiento (punto 1)
@@ -225,10 +234,10 @@ ansible-playbook -i inventory/hosts.ini vulnmgmt.yml -e @secrets-vulnmgmt.yml --
 | Paquetes (python3, nginx, podman…), usuario de servicio `vulnmgmt`, motor y panel, certificado TLS, secretos generados | `tasks/base.yml` |
 | Rol y usuario de **sólo lectura** en el indexer (sólo el índice de vulnerabilidades) y prueba de acceso | `tasks/indexer.yml` |
 | Configuración del motor (`/etc/vulnmgmt/config.json`, 0640) y logrotate | `tasks/config.yml` |
-| Ollama (versión fija, verificada con SHA-256), servicio limitado y descarga de los modelos | `tasks/ollama.yml` |
+| Desinstala Ollama y sus modelos si estaban instalados por una versión anterior del rol | `tasks/ollama_cleanup.yml` |
 | nginx (HTTPS, usuario y contraseña, cabeceras de seguridad) y firewalld | `tasks/web.yml` |
 | Reglas de Wazuh y lectura de los eventos (`wazuh-analysisd -t` antes de reiniciar) | `tasks/wazuh.yml` |
-| n8n con Podman Quadlet e importación del flujo | `tasks/n8n.yml` |
+| n8n con Podman Quadlet; arma el flujo con el script de priorización y lo importa cuando cambió | `tasks/n8n.yml` |
 | Servicio y temporizador, primer informe y resumen de acceso | `tasks/schedule.yml` |
 
 Es idempotente: se puede volver a ejecutar para actualizar el motor, el panel o la configuración.
@@ -249,11 +258,11 @@ El panel muestra:
 
 - **Indicadores:** CVE únicas, servidores afectados / total, explotadas activamente (KEV), acciones P1/P2,
   **vencidas**, sin parche y resueltas en los últimos 30 días.
-- **Resumen de la IA:** resumen ejecutivo, riesgos clave y ventana de mantenimiento sugerida (o el resumen por
-  reglas si la IA no estuvo disponible; el panel indica la fuente).
+- **Análisis y recomendaciones:** resumen, riesgos clave y ventana de mantenimiento sugerida, calculados a partir
+  de los datos del informe (determinístico: las mismas entradas dan el mismo texto).
 - **Plan de acción:** tabla filtrable por prioridad, tipo de acción, texto (paquete, servidor o CVE) y "sólo vencidas". Cada fila se despliega con los CVE (enlace a
-  NVD), los servidores, los comandos de remediación y de verificación con botón de copiar, el motivo de la
-  prioridad y la nota de la IA.
+  NVD), los servidores, los comandos de remediación y de verificación con botón de copiar y el motivo de la
+  prioridad.
 - **Plan de remediación:** comandos por servidor (sólo P1, hasta P2 o todas) con botón de copiar, los comandos de Ansible
   y la lista de acciones que requieren intervención manual.
 - **Servidores:** hallazgos, riesgo máximo y criticidad de cada uno (incluye los agentes sin hallazgos si la API
@@ -286,7 +295,7 @@ solo al final de la instalación (`vulnmgmt_first_run: run`).
 |---|---|
 | **Informe programado** | Todos los días a las 03:30 (`vulnmgmt_schedule`), con hasta 15 minutos de retraso aleatorio. Si el servidor estaba apagado a esa hora, se ejecuta al volver a encenderse (`Persistent=true`). El generado en caliente no cambia ese horario. |
 | **Desde el panel o n8n** | **No está previsto**: el panel es de sólo lectura a propósito, porque lanzar un comando desde la web ampliaría la superficie de ataque del servidor Wazuh. Se genera desde la terminal. |
-| **Cuánto tarda** | Con la IA activa puede tardar varios minutos en una VM chica (el límite es `vulnmgmt_ai_timeout`, 900 segundos); sin IA, o con el resumen por reglas, mucho menos. No se midieron tiempos reales en una VM. |
+| **Cuánto tarda** | Sin modelo de lenguaje, el informe es sobre todo recolección: lo que tarde el indexer y, la primera vez del día, la descarga de KEV y EPSS. No se midieron tiempos reales en una VM. |
 | **Qué tan actual es** | El informe refleja lo que Wazuh **ya tiene indexado**. El inventario de paquetes de cada agente se refresca cada hora (`syscollector`) y el feed de vulnerabilidades cada 60 minutos (`feed-update-interval`), así que un servidor recién parcheado puede seguir apareciendo hasta el siguiente ciclo de Wazuh. |
 | **KEV y EPSS** | Se guardan en caché (KEV 24 horas, EPSS por día), por lo que varios informes el mismo día reutilizan esos datos. |
 | **Si falla** | `journalctl -u vulnmgmt.service` indica la causa. El panel sigue mostrando el último informe válido: una ejecución fallida no publica un resultado vacío. |
@@ -400,21 +409,131 @@ riesgo (0-100) = min(100, (CVSS × 6 + EPSS × 25 + KEV × 15) × criticidad)
       groups: {}
   ```
 
-La priorización la hace el **código** (reproducible y auditable); la IA no cambia prioridades ni plazos.
+La priorización la hace el **código** (reproducible y auditable). Ningún otro componente cambia las
+prioridades ni los plazos: el script de n8n (sección 9) sólo ordena **dentro** de cada prioridad.
 
-## 8. IA local optimizada para una VM chica
+## 8. Sin IA local: qué cambió y por qué
 
-| Decisión | Por qué |
+Versiones anteriores de esta plataforma usaban un modelo de lenguaje local (**Ollama** + Qwen2.5 1.5B/0.5B)
+para redactar el resumen y una nota por acción. Ese modelo **se quitó**. El trabajo quedó repartido así:
+
+| Qué | Quién lo hace ahora | Dónde |
+|---|---|---|
+| Prioridad P1-P4, riesgo 0-100, plazo (SLA) | Motor Python, con CVSS + EPSS + KEV + criticidad | `prioritize.py` (sección 7) |
+| Comandos de remediación y de verificación | Motor Python, validando el nombre del paquete y la versión | `prioritize.py`, `remediation.py` |
+| Resumen, riesgos clave y ventana sugerida del panel | Motor Python, determinístico | `analysis.py` |
+| **Orden de trabajo, solución propuesta por acción y ventanas de mantenimiento** | **Script de n8n** | `vulnmgmt/n8n/priorizar-soluciones.js` (sección 9) |
+
+### Por qué se quitó
+
+| Motivo | Detalle |
 |---|---|
-| **Ollama** local en 127.0.0.1, versión fija verificada con SHA-256 | Gratis, sin enviar datos de vulnerabilidades a terceros, funciona sin Internet una vez instalado. |
-| **Qwen2.5 1.5B** y, si no alcanza la memoria, **Qwen2.5 0.5B** (cuantizados, ≈ 1 GB y ≈ 0,4 GB) | Modelos chicos con buen español y salida JSON, licencia Apache 2.0. El motor elige el primero que entra en la RAM libre (`/proc/meminfo`) en ese momento. |
-| El modelo se carga sólo durante el informe (`keep_alive 0`) | No ocupa memoria el resto del día. |
-| Un modelo y una petición a la vez, contexto de 4096 tokens, caché KV cuantizada (`q8_0`), *flash attention* | Menos RAM por petición. |
-| `CPUQuota=200%`, `MemoryMax=3G`, `Nice=10`, E/S *idle*, hilos = CPU − 1 (máx. 4) | El indexer y el manager de Wazuh siempre tienen prioridad. |
-| Se envían **sólo las 8 acciones principales** con datos estructurados (sin texto libre de los agentes) | Prompt corto (más rápido) y sin riesgo de inyección de instrucciones desde los datos. |
-| Salida obligada por **esquema JSON**, temperatura 0,2 y semilla fija | Respuestas estables y siempre parseables. |
-| **Validación** de la respuesta: largos acotados, sólo notas de acciones existentes, sin cambiar prioridades | La IA no puede inventar acciones ni alterar la priorización. |
-| **Respaldo por reglas** | Si Ollama no responde, no hay memoria o la respuesta no es válida, el informe se publica igual con un resumen determinístico y el panel lo indica. |
+| **Recursos** | El modelo sumaba 1-2 GB de RAM y varios minutos de CPU en cada informe, en una VM que ya corre el manager, el indexer y el dashboard de Wazuh. |
+| **Explicabilidad** | Un script determinístico se puede leer, versionar y defender línea por línea. Las mismas entradas dan siempre el mismo resultado; un modelo de lenguaje, no. |
+| **Nada que inventar** | El texto ya no puede traer un CVE, una versión o un servidor que no esté en los datos: todo sale del informe. |
+| **Menos superficie** | Un servicio menos escuchando (aunque fuera en *loopback*), un binario menos que actualizar y ~1,5 GB menos en disco. |
+| **Mantenimiento** | Cambiar el criterio de triaje o el texto del aviso es editar un archivo JavaScript, sin tocar *prompts* ni esquemas JSON. |
+
+### Desinstalación en servidores donde ya estaba
+
+El rol **desinstala Ollama** donde una versión anterior lo había instalado (`tasks/ollama_cleanup.yml`):
+detiene y deshabilita el servicio, borra la unidad de systemd, el binario (`/usr/local/bin/ollama`), las
+bibliotecas (`/usr/local/lib/ollama`), los modelos descargados (`/usr/share/ollama`, ≈ 1,5 GB), los
+*tarballs* en caché y la cuenta de servicio `ollama`.
+
+No se pierde nada irrecuperable: el binario es una *release* pública con versión fija y los modelos se
+vuelven a descargar. Para **conservar** una instalación existente:
+
+```bash
+sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_remove_ollama=false
+```
+
+> Si se quiere volver a la IA local, hay que recuperar de git los archivos `tasks/ollama.yml`,
+> `templates/ollama.service.j2` y `engine/vulnmgmt/ai.py` de un commit anterior a este cambio.
+
+## 9. Flujo no-code (n8n)
+
+Acá es donde la plataforma **prioriza las vulnerabilidades y propone las soluciones**: n8n lee el informe
+del motor y un script determinístico arma el plan de trabajo para el equipo de infraestructura.
+
+n8n Community Edition corre en un contenedor Podman, **sólo en 127.0.0.1:5678** y sin telemetría. Para usarlo:
+
+```bash
+ssh -L 5678:127.0.0.1:5678 <admin>@<servidor-wazuh>
+```
+
+Abrir `http://localhost:5678`, crear la cuenta de propietario (la primera vez) y abrir el flujo
+**"Gestión de vulnerabilidades - plan priorizado de remediación"**, ya importado:
+
+```text
+Cada lunes 08:00 / Ejecución manual
+  ─▶ Leer informe (https://127.0.0.1:8443/data/latest.json)
+  ─▶ Priorizar y proponer soluciones   ← nodo "Code": el script
+  ─▶ Enviar correo (deshabilitado)
+```
+
+### Qué hace el script
+
+El script es `vulnmgmt/n8n/priorizar-soluciones.js` (nodo *Code*, JavaScript, modo
+*Run Once for All Items*). Recibe el informe completo y devuelve un único item con `asunto`, `cuerpo`
+(el texto del aviso) y el plan estructurado (`plan`, `ventanas`, `servidores`, `resumen`), para que
+cualquier otro nodo lo use sin recalcular nada.
+
+1. **Triaje.** Respeta la prioridad P1-P4 del motor y ordena **dentro** de cada una: primero las
+   **vencidas**, después las usadas en **ransomware**, después las que están en **CISA KEV**, después las
+   que pegan en servidores de **criticidad alta**, las que **escalaron** de prioridad, y recién entonces el
+   riesgo y la cantidad de servidores afectados.
+2. **Solución propuesta por acción.** Para cada una: *qué* hay que hacer (paquete, versión objetivo y
+   servidores), *cómo* (el comando del motor), *cómo verificar* (el comando del motor), el *impacto*
+   operativo (si requiere reinicio, o cómo detectar los servicios a reiniciar con `needs-restarting -s`),
+   el *plazo* con los días que faltan y *por qué* tiene esa prioridad.
+3. **Ventanas de mantenimiento.** Agrupa en ventana de **emergencia** (P1), **semanal** (P2) y
+   **planificada** (P3/P4), y dentro de cada una separa lo que se actualiza en caliente, lo que **requiere
+   reinicio** (para juntar los reinicios en uno por servidor) y lo que **no tiene parche**.
+4. **Vista por servidor.** Reusa los comandos agrupados que ya publicó el motor (`remediation.hosts`),
+   incluido el comando de Ansible para simular con `--check --diff`.
+
+Dos reglas de diseño, para que el panel, el CSV, las alertas del SIEM y este aviso **nunca se contradigan**:
+
+- **No recalcula prioridades.** El puntaje de triaje sólo reordena dentro de la prioridad que fijó el motor.
+- **No construye comandos.** Los nombres de paquete vienen del indexer; interpolarlos en un comando dentro
+  del script saltearía las validaciones del motor (`SAFE_PACKAGE`, `SAFE_VERSION` y la protección de los
+  componentes `wazuh-*`). El script reusa los comandos ya generados, tal cual.
+
+### Ajustes sin tocar el repositorio
+
+Abriendo el nodo *Priorizar y proponer soluciones* en el editor visual, arriba del script:
+
+| Constante | Por omisión | Para qué |
+|---|---|---|
+| `PRIORIDADES_AVISO` | `['P1', 'P2']` | Qué prioridades entran en el aviso. |
+| `MAX_ACCIONES` | `25` | Tope de acciones detalladas (el resto se cuenta y remite al panel). |
+| `URL_PANEL` | el FQDN del servidor | Enlace al panel que se incluye en el aviso. |
+| `VENTANAS` | emergencia / semanal / planificada | Cómo se agrupan las prioridades en ventanas. |
+
+### Activar el envío
+
+Cargar la credencial SMTP de la empresa en el nodo *Enviar correo*, completar remitente y destinatario
+(por omisión `vulnmgmt_n8n_mail_from` y `vulnmgmt_n8n_mail_to`), habilitar el nodo y activar el flujo.
+
+> **Ojo:** la reimportación sobrescribe el flujo, así que el nodo de correo vuelve a quedar **deshabilitado
+> y sin credencial, y el flujo inactivo**. Después de una ejecución del rol que haya reimportado el flujo
+> (porque cambió el script), hay que volver a habilitar el nodo y activar el flujo.
+
+El
+nodo de correo se puede reemplazar desde el editor visual, **sin código**, por Teams, Slack, Telegram, un
+*ticket* en la mesa de ayuda, etc.: el aviso ya viene armado en `asunto` y `cuerpo`. El flujo lee el informe
+desde el propio servidor (127.0.0.1), por eso no necesita la contraseña del panel.
+
+### Cómo se mantiene el flujo
+
+El script vive en el repositorio, no pegado dentro del JSON del flujo: el rol arma el flujo con la plantilla
+`roles/vulnmgmt/templates/vulnmgmt-workflow.json.j2`, que incrusta el archivo `.js` y lo escapa. Cuando el
+script cambia, el archivo renderizado cambia y el rol **vuelve a importar** el flujo; como el flujo tiene un
+`id` fijo (`vulnmgmtWeekly01`), la importación **actualiza** el existente en lugar de duplicarlo.
+
+> Por eso el repositorio es la fuente de verdad: los cambios hechos a mano en el editor de n8n sobre ese
+> flujo se pierden en la siguiente ejecución del rol. Para experimentar, duplicar el flujo en el editor.
 
 ## 9. Flujo no-code (n8n)
 
@@ -467,8 +586,10 @@ En el dashboard de Wazuh se buscan con `rule.groups: vulnmgmt`.
   sólo lectura (GET/HEAD; el resto devuelve 405), archivos ocultos bloqueados, CSP estricta sin JavaScript en línea,
   HSTS, `X-Frame-Options`, `nosniff`, `no-referrer` y datos sin caché. El acceso se puede limitar a la red de
   administración o al bastión con `vulnmgmt_allowed_networks`.
-- **Servicios internos sólo en loopback:** Ollama (11434) y n8n (5678).
-- **Integridad del software:** Ollama con checksum SHA-256 oficial e imagen de n8n con versión fija.
+- **Servicios internos sólo en loopback:** n8n (5678). El motor no escucha en ningún puerto.
+- **Integridad del software:** imagen de n8n con versión fija (`docker.io/n8nio/n8n:2.46.4`).
+- **Script de n8n:** no construye comandos con datos del indexer ni ejecuta nada en los servidores; sólo
+  lee el informe y arma texto (sección 9).
 - **CSV:** se neutralizan las celdas que empiezan con `=`, `+`, `-`, `@`, tabulador o retorno de carro, para evitar inyección de fórmulas en Excel.
 - **SELinux** en modo *enforcing*: certificado en `/etc/pki/tls`, puerto 8443 ya etiquetado `http_port_t`,
   volúmenes de n8n con `:Z`.
@@ -482,15 +603,15 @@ Todas están en `roles/vulnmgmt/defaults/main.yml`.
 | `vulnmgmt_indexer_admin_password` | `""` | Contraseña de `admin` del indexer (una sola vez, para crear el usuario de lectura). |
 | `vulnmgmt_api_user` / `vulnmgmt_api_password` | `""` | API de Wazuh (opcional, cobertura de agentes). |
 | `vulnmgmt_scoring` | ver sección 7 | Pesos, umbrales, SLA y criticidad por servidor o grupo. |
-| `vulnmgmt_ai_enabled` | `true` | `false` para no instalar Ollama (queda el resumen por reglas). |
-| `vulnmgmt_ai_models` | 1.5B y 0.5B | Modelos y RAM libre mínima de cada uno. |
-| `vulnmgmt_ollama_memory_max` / `_cpu_quota` | `3G` / `200%` | Límites de la IA. |
+| `vulnmgmt_remove_ollama` | `true` | Desinstala la IA local de versiones anteriores; `false` la conserva (sección 8). |
 | `vulnmgmt_web_port` / `vulnmgmt_web_user` | `8443` / `infra` | Panel. |
 | `vulnmgmt_web_password` | `""` (generada) | Contraseña del panel; si queda vacía se genera y se guarda en `/etc/vulnmgmt/web.secret`. |
 | `vulnmgmt_allowed_networks` | `[]` (cualquiera) | Redes que pueden abrir el panel, p. ej. `["10.0.99.0/24"]`. |
 | `vulnmgmt_schedule` | `*-*-* 03:30:00` | Frecuencia del informe (formato `OnCalendar` de systemd). |
 | `vulnmgmt_wazuh_event_priorities` | `[P1, P2]` | Prioridades que generan alertas en Wazuh. |
-| `vulnmgmt_n8n_enabled` | `true` | `false` para no instalar n8n (n8n necesita Podman 4.4 o superior). |
+| `vulnmgmt_n8n_enabled` | `true` | `false` para no instalar n8n (n8n necesita Podman 4.4 o superior). **Sin n8n no hay plan priorizado ni aviso semanal.** |
+| `vulnmgmt_n8n_mail_from` / `_mail_to` | `vulnmgmt@cdg.uy` / `infraestructura@cdg.uy` | Remitente y destinatario del aviso (el nodo de correo igual viene deshabilitado). |
+| `vulnmgmt_panel_url` | `https://<fqdn>:8443/` | Enlace al panel que se incluye en el aviso. |
 | `vulnmgmt_allow_untested_platform` | `false` | `true` para probar otra distribución con `dnf` (sin soporte); nunca saltea la verificación de Python. |
 | `vulnmgmt_first_run` | `run` | `demo` publica datos sintéticos de demostración. |
 
@@ -505,15 +626,19 @@ vulnmgmt/
 │   ├── wazuh.py                   #   indexer (scroll) y API de Wazuh
 │   ├── intel.py                   #   CISA KEV y FIRST EPSS con caché y modo sin conexión
 │   ├── prioritize.py              #   agrupación, riesgo, prioridad, SLA y seguimiento
-│   ├── ai.py                      #   IA local (Ollama) y respaldo por reglas
+│   ├── analysis.py                #   resumen determinístico del panel (reemplazó a la IA local)
 │   ├── remediation.py             #   comandos por servidor y playbook de remediación
 │   ├── publish.py                 #   JSON, CSV, histórico y eventos para Wazuh
 │   └── demo.py                    #   datos de demostración
 ├── engine/tests/test_engine.py    # Pruebas unitarias y de integración con servidores simulados
 ├── web/                           # Panel (HTML + JS + CSS, sin dependencias externas)
 ├── wazuh/vulnmgmt_rules.xml       # Reglas 100800-100808
-└── n8n/vulnmgmt-workflow.json     # Flujo no-code
+├── n8n/priorizar-soluciones.js    # Script del nodo "Code": triaje y soluciones propuestas (sección 9)
+└── n8n/tests/                     # Pruebas del script con Node (ver su README)
 ```
+
+El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
+`roles/vulnmgmt/templates/vulnmgmt-workflow.json.j2`, que incrusta el script anterior.
 
 ## 14. Resolución de problemas
 
@@ -523,11 +648,14 @@ vulnmgmt/
 | *Preflight*: faltan credenciales del indexer | Pasar la contraseña de `admin` (sección 3). |
 | El panel dice "Todavía no hay informes" o muestra 0 hallazgos | El motor aún no corrió o los agentes todavía no enviaron el inventario: `systemctl start vulnmgmt.service` más tarde, o usar el modo `demo`. |
 | `journalctl -u vulnmgmt.service` muestra error 401/403 del indexer | Recrear el usuario de lectura: `sudo rm /etc/vulnmgmt/indexer.secret` y volver a ejecutar `sudo ./bootstrap.sh --component vulnmgmt` (pide la contraseña de `admin` y genera una nueva). |
-| El panel dice "Resumen por reglas (IA no disponible)" | Falta memoria libre o Ollama está detenido: `systemctl status ollama`, `journalctl -u ollama`. El informe se publica igual. |
+| El aviso de n8n no llega | El nodo *Enviar correo* viene deshabilitado a propósito: cargar la credencial SMTP, habilitarlo y activar el flujo (sección 9). Para probar sin correo, usar *Ejecución manual* y mirar la salida del nodo *Priorizar y proponer soluciones*. |
+| El nodo *Leer informe* falla con error de certificado | n8n confía en el certificado del panel por `NODE_EXTRA_CA_CERTS`; si se regeneró el certificado, volver a ejecutar el rol (copia el nuevo y reinicia n8n). |
+| El flujo de n8n quedó viejo tras actualizar el repositorio | El rol lo reimporta sólo cuando el archivo renderizado cambia. Forzarlo con `sudo rm /var/lib/n8n/import/vulnmgmt-workflow.json` y volver a ejecutar el rol. |
+| Aparecieron dos flujos iguales en n8n | Se duplicó a mano en el editor: el importado por el rol es el que tiene el `id` `vulnmgmtWeekly01`; borrar el otro. |
 | Faltan KEV/EPSS (aviso en el panel) | Sin salida a Internet: se usa la última caché; los avisos lo indican. |
 | `The vulnerability platform targets Rocky Linux 9/10 or Amazon Linux 2023` | El sistema no está soportado (por ejemplo Amazon Linux 2 o Rocky 8). Ver `grep PRETTY_NAME /etc/os-release`. |
-| `No package nginx available` (o `podman`, `zstd`, `logrotate`) en Amazon Linux | Dos causas posibles: el paquete **no existe** en esa distribución, o el servidor **no llega a sus repositorios**. Distinguirlo con `dnf repolist` y `dnf list --available nginx podman zstd logrotate`. Si falta sólo `podman`, instalar sin n8n (ver la fila siguiente). |
-| `n8n needs Podman 4.4 or newer`, o `podman` no disponible | Actualizar Podman, o instalar sin n8n: `sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_n8n_enabled=false`. **Sin n8n se pierde el flujo no-code semanal**; el resto de la plataforma (panel, IA, alertas y remediación) funciona igual. |
+| `No package nginx available` (o `podman`, `logrotate`) en Amazon Linux | Dos causas posibles: el paquete **no existe** en esa distribución, o el servidor **no llega a sus repositorios**. Distinguirlo con `dnf repolist` y `dnf list --available nginx podman logrotate`. Si falta sólo `podman`, instalar sin n8n (ver la fila siguiente). |
+| `n8n needs Podman 4.4 or newer`, o `podman` no disponible | Actualizar Podman, o instalar sin n8n: `sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_n8n_enabled=false`. **Sin n8n se pierden el plan priorizado y el aviso semanal** (sección 9); el panel, las alertas y la remediación funcionan igual. |
 | `firewalld is not running ... NOT opened` | No hay `firewalld`: abrir el puerto 8443/tcp con el firewall que se use. |
 | `skipping: no hosts matched` al ejecutar el playbook | El nombre del agente de Wazuh no existe en el inventario: usarlo como alias en `inventory/hosts.ini` (sección 6). |
 | El panel no abre desde la red | `firewall-cmd --list-all` y `vulnmgmt_allowed_networks`; `systemctl status nginx`. |
@@ -537,19 +665,43 @@ vulnmgmt/
 
 **Pruebas realizadas (en contenedores, con versiones reales de cada componente):**
 
-- Motor: 22 pruebas automáticas (Python 3.13 y Python 3.9 de Rocky 9) que incluyen servidores simulados del
-  indexer (*scroll*), la API de Wazuh, EPSS y Ollama, el respaldo por reglas y el seguimiento de SLA.
+- Motor: **24 pruebas automáticas, 23 pasan**. Incluyen servidores simulados del indexer (*scroll*), la API de
+  Wazuh y EPSS, el resumen determinístico y el seguimiento de SLA. La que falla
+  (`test_ansible_commands_are_real_and_tokenise_as_intended_in_bash`) es un **fallo del entorno, no del
+  código**: lanza `bash` desde Python y en Windows eso resuelve a WSL. El mismo comando corrido a mano en
+  bash da el resultado esperado.
+  - Las corridas anteriores del proyecto fueron en Python 3.13 y en el Python 3.9 de Rocky 9; **los cambios
+    de esta versión sólo se ejecutaron en Python 3.14 sobre Windows**. Conviene repetir la suite en el
+    Python 3.9 de la VM.
+- **Script de priorización de n8n** (`priorizar-soluciones.js`), ejecutado con **Node 24** tal como lo ejecuta
+  el nodo *Code* (envuelto en una función, modo *Run Once for All Items*, con `$input` simulado) contra un
+  informe real generado por el motor: orden de triaje, soluciones propuestas, ventanas y texto del aviso.
+  Además **24 comprobaciones de casos borde** (`vulnmgmt/n8n/tests/edge-cases.js`): informe vacío, informe sin
+  acciones, acción vencida y escalada, paquete protegido `wazuh-*` (conserva la guía del motor en lugar de un
+  comando), acción con campos faltantes, prioridad desconocida, tope `MAX_ACCIONES` con el conteo de omitidas
+  y, sobre todo, que el **triaje sea estricto**: la prioridad del motor manda sobre todo lo demás, ransomware
+  gana a KEV, KEV gana al riesgo más alto y una vencida gana a todo lo que está por debajo.
+- **Plantilla del flujo** (`vulnmgmt-workflow.json.j2`): se verificó, **simulando el render con Python** (en
+  este entorno no hay Ansible), que produce JSON válido, que el script incrustado queda idéntico al archivo
+  `.js` **salvo la sustitución de `URL_PANEL`**, que todas las conexiones apuntan a nodos existentes y que el
+  nodo de correo sigue deshabilitado. El procedimiento para repetirlo con Ansible está en
+  `vulnmgmt/n8n/tests/README.md`.
+- Coherencia del repositorio: los 72 archivos YAML parsean, los `import_tasks`, `notify` y plantillas
+  referenciados existen, los módulos que importa el motor existen, los anclajes del índice y los enlaces del
+  README a este documento resuelven, y los `id` que lee `app.js` están en `index.html`.
 - **OpenSearch 2.19** con el plugin de seguridad: creación idempotente del rol y del usuario de sólo lectura,
   y lectura con verificación TLS contra la CA.
 - **Wazuh manager 4.12.0:** `wazuh-analysisd -t` y `wazuh-logtest` con eventos generados por el propio motor
   para los 8 casos (resumen, P1/P2 nuevas, escaladas, vencidas, KEV y KEV vencida); lectura real del archivo de
   eventos por `localfile`.
-- **n8n 2.46.4:** importación por CLI y ejecución del flujo (lectura del informe, filtro P1/P2 y armado del mensaje).
+- **n8n 2.46.4:** importación por CLI y ejecución del flujo anterior (lectura del informe, filtro P1/P2 y armado
+  del mensaje). **El flujo nuevo, con el nodo *Code*, no se importó ni se ejecutó dentro de n8n en este
+  entorno** (ver limitaciones).
 - **nginx 1.26** con la configuración generada: 401 sin usuario o con contraseña incorrecta, 200 con usuario,
   405 para métodos distintos de GET/HEAD, 404 para archivos ocultos (también con usuario válido), acceso local sin
   contraseña para n8n, cabeceras de seguridad y TLS 1.1 rechazado.
 - Panel en Chromium con la CSP estricta (tema claro, oscuro y móvil).
-- **Remediación:** 22 pruebas automáticas del motor (8 son de la remediación: filtros, exclusión de `wazuh-*`, nombres, versiones y CVE
+- **Remediación:** 24 pruebas automáticas del motor (8 son de la remediación: filtros, exclusión de `wazuh-*`, nombres, versiones y CVE
   hostiles que no llegan a ningún comando, comandos por alcance y gestor de paquetes, comandos de Ansible que bash
   tokeniza como se espera, orden por prioridad y que el playbook sea YAML válido y no reinicie). Se comprobó con
   mutaciones que las pruebas de seguridad fallan si se quita la validación.
@@ -558,7 +710,8 @@ vulnmgmt/
   needs-restarting` (reinicio necesario, no necesario, comando inexistente y `dnf` ausente) y el paso `dnf` en modo
   `--check` (parámetros aceptados, incluido `disablerepo` con comodín). La sección del panel se probó en Chromium
   (CSP, descarga, copiar al portapapeles, tema oscuro y móvil).
-- `ansible-lint` (perfil `production`), `--syntax-check` y `shellcheck`.
+- `ansible-lint` (perfil `production`), `--syntax-check` y `shellcheck`. **No se volvieron a correr para los
+  cambios de esta versión** (no hay Ansible en el entorno donde se hicieron): correrlos antes de la defensa.
 
 **Limitaciones (validar en la maqueta antes de la defensa):**
 
@@ -580,8 +733,14 @@ vulnmgmt/
   Validar `--check` y luego la aplicación en un servidor de prueba antes de usarlo en producción.
 - El texto que imprime `dnf needs-restarting` se verificó contra el código fuente de `dnf-plugins-core`, no contra un
   servidor con reinicio pendiente real.
-- No se descargaron ni ejecutaron los modelos de Ollama en este entorno (el registro de modelos no era
-  accesible): falta medir en la VM el tiempo de respuesta y el uso de memoria reales.
+- **El flujo nuevo no se importó dentro de n8n**: en este entorno no había Podman ni la imagen de n8n. El
+  script se ejecutó con Node 24 reproduciendo cómo lo invoca el nodo *Code*, y la plantilla se verificó
+  renderizada, pero falta confirmar en la maqueta: que `n8n import:workflow` acepte el flujo, que
+  **actualice** el existente en lugar de duplicarlo (el `id` es fijo) y que el nodo *Code* de la versión
+  2.46.4 acepte `mode: runOnceForAllItems` y `language: javaScript` tal como los escribe la plantilla.
+- **La desinstalación de Ollama no se probó sobre un servidor que lo tuviera instalado**: las tareas son
+  `state: absent` e idempotentes, pero conviene verificar en la maqueta que el servicio quede detenido y que
+  se libere el espacio de `/usr/share/ollama`.
 - EPSS y `cisa.gov` no eran accesibles desde el entorno de pruebas; KEV se probó con el espejo oficial de GitHub
   y EPSS con un servidor simulado.
 - Los datos de vulnerabilidades dependen de la cobertura del detector de Wazuh para cada sistema operativo.
