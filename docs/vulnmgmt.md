@@ -374,6 +374,20 @@ Para cada CVE en cada servidor:
 riesgo (0-100) = min(100, (CVSS × 6 + EPSS × 25 + KEV × 15) × criticidad)
 ```
 
+### En base a qué se prioriza
+
+Los cuatro insumos se combinan, en lugar de usar uno solo, porque cada uno responde una pregunta distinta:
+
+- **CVSS** mide **severidad**: cuánto daño haría si la explotaran. No dice nada sobre la probabilidad de que
+  eso ocurra, y la mayoría de las CVE con CVSS alto nunca se explotan. Por eso pesa mucho (hasta 60 puntos)
+  pero no decide solo.
+- **EPSS** agrega la **probabilidad**: el modelo de FIRST estima, a partir de explotación observada en
+  Internet, qué chance hay de que esa CVE se explote en los próximos 30 días.
+- **CISA KEV** no es una estimación, es un **hecho**: la CVE está en el catálogo porque se observó
+  explotación real. Por eso, además de sumar 15 puntos, **fuerza P1 sin importar el puntaje**.
+- **La criticidad del servidor** aporta el **contexto**: la misma CVE no pesa lo mismo en el IdP que en un
+  servidor de pruebas.
+
 | Elemento | Fuente | Peso |
 |---|---|---|
 | CVSS (0-10) | Wazuh (`vulnerability.score.base`); si falta, se estima por la severidad (Critical 9, High 7, Medium 4, Low 0,1) | hasta 60 |
@@ -388,6 +402,19 @@ riesgo (0-100) = min(100, (CVSS × 6 + EPSS × 25 + KEV × 15) × criticidad)
 | **P3** | riesgo ≥ 35 | 90 días |
 | **P4** | resto | 180 días |
 
+### Por qué no alcanza con ordenar por CVSS
+
+Dos acciones de un informe real, las dos sobre servidores de criticidad media (factor ×1,0):
+
+| Paquete | CVE | CVSS | EPSS | KEV | Cuenta | Riesgo | Prioridad |
+|---|---|---|---|---|---|---|---|
+| `curl` | CVE-2023-38545 | **9,8** | 4 % | no | 9,8×6 + 0,04×25 + 0 | 59,8 | **P2** |
+| `sudo` | CVE-2021-3156 | 7,8 | 92 % | **sí** | 7,8×6 + 0,92×25 + 15 | 84,8 | **P1** |
+
+`curl` tiene el CVSS más alto y queda por debajo: su probabilidad de explotación es baja y nadie observó que
+se esté explotando. `sudo` es menos grave en el papel, pero se explota activamente y figura en KEV. Ordenar
+por CVSS habría puesto primera justamente la que menos urge.
+
 - Los hallazgos se **agrupan por paquete**: una acción = un paquete en uno o más servidores, con el riesgo y la
   prioridad del peor de sus CVE.
 - **Tipo de acción:** `actualizar` (existe versión corregida: se indica la versión mínima y el comando),
@@ -395,6 +422,10 @@ riesgo (0-100) = min(100, (CVSS × 6 + EPSS × 25 + KEV × 15) × criticidad)
   versión).
 - **Seguimiento:** la fecha de primera detección se conserva entre ejecuciones; una acción que supera su plazo
   queda **vencida**; si sube de prioridad queda **escalada**; si deja de aparecer pasa a **resueltas**.
+- **Explicabilidad:** cada acción publica el campo `reasons` con los motivos concretos por los que quedó en esa
+  prioridad (CVSS, el porcentaje de EPSS, cuántas de sus CVE están en KEV, si se usa en campañas de ransomware,
+  qué servidores de criticidad alta afecta). El panel lo muestra en *"Por qué tiene esta prioridad"*, el CSV lo
+  exporta y el aviso de n8n lo repite: cualquier P1 se puede justificar sin volver a calcular nada.
 - Pesos, umbrales, plazos y criticidades son variables (sección 12). Ejemplo para marcar servidores críticos:
 
   ```yaml
@@ -410,7 +441,8 @@ riesgo (0-100) = min(100, (CVSS × 6 + EPSS × 25 + KEV × 15) × criticidad)
   ```
 
 La priorización la hace el **código** (reproducible y auditable). Ningún otro componente cambia las
-prioridades ni los plazos: el script de n8n (sección 9) sólo ordena **dentro** de cada prioridad.
+prioridades ni los plazos: el script de n8n (sección 9) sólo ordena **dentro** de cada prioridad, y lo hace
+con una clave de desempate **estricta**, no con otra suma de pesos.
 
 ## 8. Sin IA local: qué cambió y por qué
 
@@ -482,7 +514,10 @@ cualquier otro nodo lo use sin recalcular nada.
 1. **Triaje.** Respeta la prioridad P1-P4 del motor y ordena **dentro** de cada una: primero las
    **vencidas**, después las usadas en **ransomware**, después las que están en **CISA KEV**, después las
    que pegan en servidores de **criticidad alta**, las que **escalaron** de prioridad, y recién entonces el
-   riesgo y la cantidad de servidores afectados.
+   riesgo y la cantidad de servidores afectados. Los niveles son **estrictos**: se comparan como una clave
+   lexicográfica, así que el primero que difiere decide y los de abajo no lo pueden compensar. Con una suma de
+   pesos, una acción sin KEV pero de riesgo alto y presente en muchos servidores podía adelantarse a otra que
+   CISA marca como explotada; hay pruebas que lo verifican (`vulnmgmt/n8n/tests/edge-cases.js`).
 2. **Solución propuesta por acción.** Para cada una: *qué* hay que hacer (paquete, versión objetivo y
    servidores), *cómo* (el comando del motor), *cómo verificar* (el comando del motor), el *impacto*
    operativo (si requiere reinicio, o cómo detectar los servicios a reiniciar con `needs-restarting -s`),
