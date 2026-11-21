@@ -1,11 +1,31 @@
----
-# Example host_vars for the bastion / jump server. Rename to
-# host_vars/<inventory_hostname>.yml (e.g. host_vars/srv-bastion.yml).
+# Example host_vars for the bastion / jump server (mgmt-bastion, 10.10.99.10).
+# Rename to host_vars/<inventory_hostname>.yml (e.g. host_vars/srv-bastion.yml),
+# or host_vars/localhost.yml when bootstrap.sh runs on the bastion itself.
 
 # A jump host must allow TCP forwarding (ssh -J / ProxyJump), so the CIS
 # Level 2 control 5.1.10 (DisableForwarding) is relaxed ONLY on this host.
 hardening_ssh_disable_forwarding: false
+# "DisableForwarding no" also re-enables agent and Unix-socket forwarding, and
+# ssh -J only needs TCP. The lab adds this drop-in by hand,
+# /etc/ssh/sshd_config.d/10-bastion.conf (read after 00-cis-hardening.conf):
+#   AllowAgentForwarding no
+#   AllowStreamLocalForwarding no
+# With agent forwarding off, a compromised bastion cannot reuse the admins'
+# keys to reach the other servers: the private key never leaves their PC.
 
-# The bastion is the entry point: it accepts SSH from the admin VPN/network,
-# while the other servers accept SSH only from the bastion.
-hardening_ssh_allowed_networks: ["10.0.99.0/24"]
+# The bastion is the entry point: SSH from the management network and from the
+# admin VPN only (the users' VPN does not reach it, by design). The other
+# servers accept SSH only from the bastion (10.10.99.10/32).
+hardening_ssh_allowed_networks: ["10.10.99.0/24", "10.10.201.0/24"]
+
+# Local rescue account (wheel) plus the FreeIPA administrators.
+hardening_ssh_allow_groups: [wheel, sysadmins]
+
+# The bastion is a FreeIPA client: ipa-client requires autofs and nfs-utils,
+# and nfs-utils requires rpcbind. Documented exception (CIS 2.1.1, 2.1.9,
+# 2.1.12); their services are masked, since the control asks for the service
+# to be inactive.
+hardening_packages_keep: [autofs, nfs-utils, rpcbind]
+
+# Updates are applied by hand in a maintenance window.
+hardening_dnf_automatic: false

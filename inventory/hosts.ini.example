@@ -1,30 +1,38 @@
-# Example inventory for running the playbook from a control node over SSH.
+# Example inventory for running the playbooks from a control node over SSH.
 # Copy to inventory/hosts.ini and adapt. The user must be able to sudo.
 #
 #   ansible-playbook -i inventory/hosts.ini site.yml --ask-become-pass
+#
+# Addresses of the lab (corp.cdg.uy). The servers accept SSH only from the
+# bastion, so they are reached through it (ProxyJump), as an administrator
+# does by hand with ssh -J.
+#
+# Use a LOCAL account with sudo (here localadm), not a FreeIPA account with
+# OTP: Ansible asks sudo again for many tasks, and a one-time code cannot be
+# reused. In the lab the hardening was run with bootstrap.sh on each server.
 
 [rocky_servers]
-srv-idp      ansible_host=10.0.10.11
-srv-siem     ansible_host=10.0.10.12
-srv-bastion  ansible_host=10.0.10.10
+srv-bastion  ansible_host=10.10.99.10
+srv-ipa      ansible_host=10.10.30.20  ansible_ssh_common_args='-o ProxyJump=amontero@10.10.99.10'
+srv-sso      ansible_host=10.10.30.30  ansible_ssh_common_args='-o ProxyJump=amontero@10.10.99.10'
 
 [rocky_servers:vars]
-ansible_user=admin
+ansible_user=localadm
 ansible_python_interpreter=/usr/bin/python3
 
 # Unused alternative: another server that reads the Wazuh indexer of srv-siem
 # (vulnmgmt_wazuh_host in host_vars/srv-vulnmgmt.yml). Left empty on purpose.
 [vulnmgmt_server]
-# srv-vulnmgmt ansible_host=10.0.10.20
+# srv-vulnmgmt ansible_host=<address>
 
 [vulnmgmt_server:vars]
 ansible_user=admin
 ansible_python_interpreter=/usr/bin/python3
 
-# Wazuh server: the vulnerability platform (vulnmgmt.yml) and n8n run here.
+# Wazuh server (srv-wazuh, Amazon Linux 2023 image): the vulnerability
+# platform (vulnmgmt.yml) and n8n run here. It is not hardened.
 [wazuh_server]
-srv-siem     ansible_host=10.0.10.12
+srv-siem     ansible_host=10.10.30.10  ansible_user=wazuh-user  ansible_ssh_common_args='-o ProxyJump=amontero@10.10.99.10'
 
 [wazuh_server:vars]
-ansible_user=admin
 ansible_python_interpreter=/usr/bin/python3

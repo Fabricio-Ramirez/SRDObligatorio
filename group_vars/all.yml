@@ -4,13 +4,15 @@
 # Per-server differences go in host_vars/<inventory_hostname>.yml
 # (see host_vars/README.md).
 
-# SIEM integration (mandatory): Wazuh manager address. Can also be passed on
-# the command line: bootstrap.sh --siem-host 10.10.30.10
+# SIEM integration (mandatory): Wazuh manager address (srv-wazuh in the lab).
+# The command line overrides it: bootstrap.sh --siem-host 10.10.30.10
 hardening_siem_type: wazuh
-hardening_siem_host: ""
+hardening_siem_host: "10.10.30.10"
 
 # Secure administrative access: accept SSH only from the bastion / admin
-# network. Leave empty until the bastion exists.
+# network. Left empty here on purpose: each server sets it in host_vars
+# (10.10.99.10/32 on the servers, the admin networks on the bastion itself),
+# so a run without host_vars cannot lock the bastion out.
 hardening_ssh_allowed_networks: []
 
 # Only members of these groups may log in over SSH (CIS 5.1.7).

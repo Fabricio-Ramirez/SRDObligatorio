@@ -1,0 +1,28 @@
+# Example host_vars for srv-ipa (10.10.30.20): FreeIPA server with integrated
+# DNS and CA. Rename to host_vars/<inventory_hostname>.yml
+# (e.g. host_vars/srv-ipa.yml), or host_vars/localhost.yml when bootstrap.sh
+# runs on the server itself.
+
+# SSH only from the bastion. The role removes the generic ssh service and
+# accepts it through a rich rule from this address.
+hardening_ssh_allowed_networks: ["10.10.99.10/32"]
+
+# Directory services: dns (integrated DNS) and freeipa-4 (HTTP/HTTPS, LDAP,
+# LDAPS, Kerberos and kpasswd).
+hardening_firewall_allowed_services: [ssh, dns, freeipa-4]
+
+# Documented exceptions to CIS 2.1.x:
+# - bind (2.1.4): the integrated DNS of FreeIPA.
+# - httpd (2.1.18): the FreeIPA web portal and API.
+# - autofs, nfs-utils (2.1.1, 2.1.9): required by ipa-client, which ipa-server
+#   requires; rpcbind (2.1.12) is required by nfs-utils. Removing any of them
+#   would remove FreeIPA itself. Their services stay inactive.
+hardening_packages_keep: [bind, httpd, autofs, nfs-utils, rpcbind]
+
+# Never update the directory automatically: on 18/11 an interrupted automatic
+# update left FreeIPA down. Updates are manual (snapshot, dnf update,
+# ipa-server-upgrade if needed, ipactl status). In the lab the dnf-automatic
+# timers are also masked:
+#   systemctl mask dnf-automatic.timer dnf-automatic-download.timer \
+#                  dnf-automatic-install.timer dnf-automatic-notifyonly.timer
+hardening_dnf_automatic: false

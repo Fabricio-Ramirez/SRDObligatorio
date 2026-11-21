@@ -14,8 +14,9 @@ hardening_ssh_allow_groups: [wheel, sysadmins]
 # Keycloak (8443) and Grafana (3000), both over HTTPS.
 hardening_firewall_allowed_ports: ["8443/tcp", "3000/tcp"]
 
-# Documented exception (CIS 2.1.1, 2.1.9, 2.1.12): kept on this server, which
-# is a FreeIPA client.
+# Documented exception (CIS 2.1.1, 2.1.9, 2.1.12): the server is a FreeIPA
+# client; ipa-client requires autofs and nfs-utils, and nfs-utils requires
+# rpcbind. Removing them would remove the client.
 hardening_packages_keep: [autofs, nfs-utils, rpcbind]
 
 # Updates are applied by hand in a maintenance window (snapshot first): an

@@ -171,8 +171,8 @@ Opciones de `bootstrap.sh` (ver `./bootstrap.sh --help`):
 
 Todas las variables, con su referencia CIS, están documentadas en `roles/hardening/defaults/main.yml`.
 Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor en `host_vars/<servidor>.yml`
-(ver los ejemplos `host_vars/srv-bastion.yml.example`, `host_vars/srv-sso.yml.example` y
-`host_vars/srv-siem.yml.example` para el servidor Wazuh).
+(ver los ejemplos `host_vars/srv-bastion.yml.example`, `host_vars/srv-ipa.yml.example`,
+`host_vars/srv-sso.yml.example` y `host_vars/srv-siem.yml.example` para el servidor Wazuh).
 
 | Variable | Defecto | Uso |
 |---|---|---|
@@ -186,7 +186,7 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
 | `hardening_firewall_allowed_services` / `_ports` | `[ssh]` / `[]` | Servicios/puertos según el rol del servidor (p. ej. `["443/tcp"]`, Wazuh manager `["1514/tcp","1515/tcp","55000/tcp"]`). |
 | `hardening_packages_absent` | lista CIS 2.1/2.2 | Paquetes que se desinstalan. |
 | `hardening_packages_keep` | `[]` | Paquetes de la lista anterior que **este** servidor necesita (excepción documentada), p. ej. `[nginx]` en un servidor web o en el servidor Wazuh (panel de vulnerabilidades). |
-| `hardening_dnf_automatic` | `true` | `false` en servidores críticos (p. ej. FreeIPA o SSO): las actualizaciones se aplican a mano, con snapshot previo. |
+| `hardening_dnf_automatic` | `true` | `false` en servidores críticos (FreeIPA, SSO, bastión): las actualizaciones se aplican a mano, con snapshot previo. |
 | `hardening_ip_forwarding` | `false` | `true` sólo en routers, gateways VPN o hosts de contenedores. |
 | `hardening_grub_password_pbkdf2` | `""` | Hash de `grub2-mkpasswd-pbkdf2` (CIS 1.4.1); guardarlo con `ansible-vault`. |
 | `hardening_audit_immutable` | `true` | Reglas de auditoría inmutables (CIS 6.3.3.20): cambiarlas requiere reiniciar. |
@@ -205,7 +205,8 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
 │   ├── localhost.ini            # Ejecución local (bootstrap.sh)
 │   └── hosts.ini.example        # Ejecución remota desde un nodo de control
 ├── group_vars/all.yml           # Parámetros del sitio (SIEM, redes de administración, NTP)
-├── host_vars/srv-bastion.yml.example  # Salto: reenvío TCP para ssh -J
+├── host_vars/srv-bastion.yml.example  # Salto: reenvío TCP para ssh -J, SSH desde administración y VPN
+├── host_vars/srv-ipa.yml.example      # FreeIPA: conserva bind, httpd y las dependencias de ipa-client
 ├── host_vars/srv-sso.yml.example      # Keycloak + Grafana: puertos 8443 y 3000
 ├── host_vars/srv-siem.yml.example  # Excepciones del servidor Wazuh (conserva nginx)
 ├── scripts/verify.sh            # Evidencia post-endurecimiento (+ escaneo OpenSCAP opcional)
