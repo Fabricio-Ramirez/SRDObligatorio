@@ -7,24 +7,23 @@
 srv-idp      ansible_host=10.0.10.11
 srv-siem     ansible_host=10.0.10.12
 srv-bastion  ansible_host=10.0.10.10
-srv-vulnmgmt ansible_host=10.0.10.20
 
 [rocky_servers:vars]
 ansible_user=admin
 ansible_python_interpreter=/usr/bin/python3
 
-# Dedicated vulnerability management server (Rocky Linux 10). It reads the
-# Wazuh indexer of srv-siem: set vulnmgmt_wazuh_host in host_vars/srv-vulnmgmt.yml.
+# Unused alternative: another server that reads the Wazuh indexer of srv-siem
+# (vulnmgmt_wazuh_host in host_vars/srv-vulnmgmt.yml). Left empty on purpose.
 [vulnmgmt_server]
-srv-vulnmgmt ansible_host=10.0.10.20
+# srv-vulnmgmt ansible_host=10.0.10.20
 
 [vulnmgmt_server:vars]
 ansible_user=admin
 ansible_python_interpreter=/usr/bin/python3
 
-# Wazuh server: only for the local mode of vulnmgmt.yml (platform on the Wazuh server).
+# Wazuh server: the vulnerability platform (vulnmgmt.yml) and n8n run here.
 [wazuh_server]
-# srv-siem   ansible_host=10.0.10.12   (uncomment ONLY for the local mode)
+srv-siem     ansible_host=10.0.10.12
 
 [wazuh_server:vars]
 ansible_user=admin

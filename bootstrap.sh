@@ -3,11 +3,11 @@
 # bootstrap.sh - installs and runs one component of this repository on THIS server:
 #
 #   --component hardening (default)  CIS Benchmark Level 1 hardening. Rocky Linux 9 / 10 only.
-#   --component vulnmgmt             Vulnerability management platform. Recommended on a
-#                                    dedicated Rocky Linux 10 server that reads the Wazuh
-#                                    indexer over the network (--wazuh-host). Without
-#                                    --wazuh-host it installs on the Wazuh server itself
-#                                    (Rocky Linux 9 / 10 or Amazon Linux 2023).
+#   --component vulnmgmt             Vulnerability management platform, installed on the
+#                                    Wazuh server itself (Amazon Linux 2023 or Rocky Linux
+#                                    9 / 10), with n8n in a local Docker container.
+#                                    (--wazuh-host: unused alternative, another server that
+#                                    reads the Wazuh indexer over the network.)
 #
 # Each component checks the operating system it needs; one never blocks the other.
 #
@@ -23,7 +23,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Fabricio-Ramirez/SRDObligatorio/HEAD/bootstrap.sh \
 #     | sudo bash -s -- --siem-host 10.0.10.12        # without a clone
 #
-# Dedicated vulnerability management server (Rocky Linux 10), Wazuh at 10.0.10.12:
+# Unused alternative - platform on another server (Rocky Linux 10), Wazuh at 10.0.10.12:
 #   ./bootstrap.sh --component hardening --profile vulnmgmt-server --siem-host 10.0.10.12
 #   (reboot)
 #   ./bootstrap.sh --component vulnmgmt --wazuh-host 10.0.10.12 --wazuh-ca /root/wazuh-root-ca.pem

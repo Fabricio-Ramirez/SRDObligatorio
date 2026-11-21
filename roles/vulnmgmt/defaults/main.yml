@@ -2,10 +2,10 @@
 # =============================================================================
 # Vulnerability management platform (assignment item 5). Two deployment modes:
 #
-#   remote (recommended): a dedicated Rocky Linux 10 server reads the Wazuh
-#           indexer and API over the network. Set vulnmgmt_wazuh_host.
-#   local:  installed on the Wazuh server itself (all-in-one: manager +
+#   local (used): installed on the Wazuh server itself (all-in-one: manager +
 #           indexer + dashboard, Wazuh >= 4.8). vulnmgmt_wazuh_host empty.
+#   remote (unused alternative): another server reads the Wazuh indexer and
+#           API over the network. Set vulnmgmt_wazuh_host.
 #
 # Secrets (passwords) must be passed with --extra-vars / ansible-vault; the
 # role never writes them into the repository.

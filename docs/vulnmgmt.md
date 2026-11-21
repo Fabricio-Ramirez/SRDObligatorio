@@ -1,4 +1,4 @@
-# Gestión de vulnerabilidades — servidor dedicado que lee Wazuh
+# Gestión de vulnerabilidades — plataforma sobre el servidor Wazuh
 
 Punto **5. "Gestión de Vulnerabilidades"** del obligatorio de **Seguridad en Redes y Datos**
 (Corporación de Generación S.A., cdg.uy).
@@ -7,16 +7,10 @@ Punto **5. "Gestión de Vulnerabilidades"** del obligatorio de **Seguridad en Re
 > informes periódicos y traducirlos en acciones priorizadas y viables para los equipos de
 > infraestructura. Suma valor el uso de IA y de flujos *no-code*.
 
-Se instala igual que el endurecimiento (*install and play* con `bootstrap.sh` + Ansible) en un **servidor
-dedicado con Rocky Linux 10** (`srv-vulnmgmt`). Ese servidor se endurece con la plantilla del punto 1 y **lee por
-la red los hallazgos que genera Wazuh** (indexer, puerto 9200, con un usuario de sólo lectura). El motor en
-Python arma el informe y el orden de las vulnerabilidades. Sobre el servidor Wazuh (imagen oficial, Amazon Linux 2023) no
-se instala nada salvo el archivo de reglas de alertas. Todo es software libre y gratuito y corre **dentro de la
-infraestructura**, sin APIs pagas ni envío de datos a terceros.
-
-> **Cambio de arquitectura:** antes la plataforma se instalaba en el propio servidor Wazuh. Ese modo sigue
-> disponible (sin `--wazuh-host`, sección 4, opción B), pero el recomendado es el servidor dedicado: no
-> carga al servidor Wazuh y queda endurecido.
+Se instala igual que el endurecimiento (*install and play* con `bootstrap.sh` + Ansible), **en el propio servidor
+Wazuh** (imagen oficial, Amazon Linux 2023), y todo queda alojado ahí: el motor en Python que arma el informe y el orden de
+las vulnerabilidades, el panel web y **n8n en un contenedor Docker local**. No hace falta ningún otro servidor. Todo es
+software libre y gratuito y corre **dentro de la infraestructura**, sin APIs pagas ni envío de datos a terceros.
 
 ## Índice
 
@@ -47,42 +41,41 @@ infraestructura**, sin APIs pagas ni envío de datos a terceros.
 | Acciones **priorizadas** | Riesgo 0-100 que combina **CVSS** (severidad), **EPSS** (probabilidad de explotación, FIRST), **CISA KEV** (explotadas activamente) y la **criticidad** del servidor. Prioridad P1-P4 con **plazo (SLA)** y seguimiento de acciones **vencidas**, **nuevas**, **escaladas** y **resueltas**. |
 | Acciones **viables** | Una acción por paquete (no una por CVE): servidores afectados, versión objetivo, comandos de remediación y de verificación, aviso de reinicio y ventana de mantenimiento sugerida. |
 | **Remediar** (resolver las vulnerabilidades) | Por cada servidor genera **comandos listos para copiar** y un **playbook de Ansible** (`remediation.yml`) con simulación previa (`--check`), filtro por prioridad y aviso de reinicio. La plataforma **no ejecuta nada** en los servidores: lo aplica el equipo desde el bastión (sección 6). |
-| **No-code** (valor agregado) | **n8n Community Edition** (gratuito, *self-hosted*) con un flujo importado: cada lunes lee el informe y un **script determinístico** ordena las acciones por urgencia, propone la solución y la verificación de cada una, las agrupa en ventanas de mantenimiento y arma el aviso para infraestructura (correo, Teams, Slack, Telegram… se cambian desde el editor visual). Ver sección 9. |
+| **No-code** (valor agregado) | **n8n Community Edition** (gratuito, *self-hosted*) en un **contenedor Docker en el servidor Wazuh**, con un flujo importado: cada lunes lee el informe y un **script determinístico** ordena las acciones por urgencia, propone la solución y la verificación de cada una, las agrupa en ventanas de mantenimiento y arma el aviso para infraestructura (correo, Teams, Slack, Telegram… se cambian desde el editor visual). Ver sección 9. |
 | Explicabilidad | Toda la priorización y todo el texto del informe salen de **código determinístico y auditable**: las mismas entradas dan siempre el mismo resultado, sin modelos de lenguaje (sección 8). |
-| Integración con el SIEM | Eventos JSON que el **agente Wazuh del servidor dedicado** envía al manager, donde las reglas propias (100800-100808) generan alertas de nivel 10-14 para las acciones P1/P2 nuevas o escaladas, KEV y vencidas. |
+| Integración con el SIEM | Eventos JSON que el propio manager lee, con reglas propias (100800-100808): las acciones P1/P2 nuevas o escaladas, KEV y vencidas generan alertas de nivel 10-14. |
 
 ## 2. Arquitectura
 
 ```text
- Servidores (agente Wazuh)          Servidor Wazuh (imagen oficial,           srv-vulnmgmt (Rocky Linux 10,
- ┌────────────┐ inventario de       Amazon Linux 2023)                        endurecido con el punto 1)
- │ srv-idp    │ paquetes   ┌──────────────────────────────────┐     ┌─────────────────────────────────────────────┐
- │ srv-web    │───────────▶│ wazuh-manager ─ detector de      │     │ vulnmgmt.timer 03:30 ─▶ motor Python         │
- │ srv-bastion│            │                 vulnerabilidades │     │  1. lee hallazgos (HTTPS 9200, verificado     │
- │ ...        │            │      │                           │     │     con root-ca.pem) y agentes (API 55000)   │
- └────────────┘            │      ▼                           │     │  2. enriquece con KEV + EPSS                 │
-                           │ wazuh-indexer :9200 ◀───────────────────│  3. agrupa, prioriza (P1-P4), SLA            │
-                           │  wazuh-states-vulnerabilities-*  │ lee │  4. resumen determinístico                   │
-                           │  (usuario vulnmgmt-reader)       │     │  5. publica                                  │
-                           │                                  │     │   ├─▶ /var/www/vulnmgmt/data (JSON, CSV)     │
-                           │ reglas 100800-100808 ◀───────────────┐ │   │     └─▶ nginx :8443 (HTTPS + usuario)    │
-                           │ (alertas 10-14 en el dashboard)  │  │ │   └─▶ /var/log/vulnmgmt/events.json          │
-                           └──────────────────────────────────┘  │ │           │                                │
-                                                                 └─│── agente Wazuh (1514) ◀┘                   │
-   Internet (opcional, con caché)                                  │                                             │
-   CISA KEV, FIRST EPSS ──────────────────────────────────────────▶│ n8n 127.0.0.1:5678 (lunes 08:00)            │
-                                                                   │   └─▶ lee latest.json ─▶ script de          │
-                                                                   │       priorización ─▶ plan + aviso          │
-                                                                   └─────────────────────────────────────────────┘
+ Servidores (agente Wazuh)                              Servidor Wazuh (imagen oficial, Amazon Linux 2023)
+ ┌────────────┐  inventario de paquetes   ┌──────────────────────────────────────────────────────────────┐
+ │ srv-idp    │──────────────────────────▶│ wazuh-manager ── detector de vulnerabilidades                │
+ │ srv-web    │                           │      │                                                       │
+ │ srv-bastion│                           │      ▼                                                       │
+ │ ...        │                           │ wazuh-indexer 127.0.0.1:9200                                 │
+ └────────────┘                           │   índice wazuh-states-vulnerabilities-*                      │
+                                          │      │ (HTTPS verificado con root-ca.pem,                    │
+                                          │      │  usuario de sólo lectura vulnmgmt-reader)             │
+   Internet (opcional, con caché)         │      ▼                                                       │
+   CISA KEV ───────────────────────────────────▶ vulnmgmt.timer 03:30 ─▶ motor Python                    │
+   FIRST EPSS ─────────────────────────────────▶  1. recolecta hallazgos y agentes                       │
+                                          │       2. enriquece con KEV + EPSS                            │
+                                          │       3. agrupa, prioriza (P1-P4), SLA y seguimiento         │
+                                          │       4. resumen determinístico (analysis.py)                │
+                                          │       5. publica                                             │
+                                          │      ├──▶ /var/www/vulnmgmt/data (JSON, CSV, histórico)      │
+                                          │      │        └──▶ nginx :8443 (HTTPS + usuario) ─▶ Panel web│
+                                          │      └──▶ /var/log/vulnmgmt/events.json ─▶ reglas Wazuh      │
+                                          │                                            (alertas 10-14)   │
+                                          │ Docker ─ contenedor n8n 127.0.0.1:5678 (lunes 08:00)         │
+                                          │   └─▶ lee latest.json ─▶ script "Priorizar y proponer        │
+                                          │        soluciones" ─▶ plan ordenado + ventanas ─▶ aviso      │
+                                          └──────────────────────────────────────────────────────────────┘
 ```
 
-Qué viaja por la red entre los dos servidores:
-
-| Origen → destino | Puerto | Para qué | Seguridad |
-|---|---|---|---|
-| srv-vulnmgmt → Wazuh | 9200/tcp | Leer los hallazgos de vulnerabilidades del indexer | TLS **verificado** contra la CA del indexer (`root-ca.pem`), usuario `vulnmgmt-reader` de sólo lectura |
-| srv-vulnmgmt → Wazuh | 55000/tcp (opcional) | Inventario de agentes (cobertura) | TLS sin verificar (certificado autofirmado de la API): usuario con rol `readonly` y puerto abierto sólo para srv-vulnmgmt |
-| srv-vulnmgmt → Wazuh | 1514/tcp y 1515/tcp | Agente Wazuh: logs del servidor y alertas de la plataforma | El cifrado propio del agente |
+Todas las conexiones internas de la plataforma (motor → indexer, n8n → panel) usan `127.0.0.1`: **no salen del
+servidor**. Hacia afuera sólo se abre el panel (8443/tcp), y opcionalmente se consultan KEV y EPSS en Internet.
 
 Componentes y consumo aproximado:
 
@@ -90,34 +83,15 @@ Componentes y consumo aproximado:
 |---|---|---|
 | Motor `vulnmgmt` | Servicio *oneshot* disparado por el temporizador; sólo librería estándar de Python 3.9+ | Máx. 50 % de 1 CPU y 512 MB (`CPUQuota`/`MemoryMax`), prioridad baja |
 | nginx | Sirve archivos estáticos | Mínimo |
-| n8n | Contenedor **Docker** (unidad systemd `n8n.service`) en 127.0.0.1; ejecuta el script de priorización una vez por semana | Máx. 1 GB (`--memory`) |
+| n8n | Contenedor **Docker local** (unidad systemd `n8n.service`) en 127.0.0.1; ejecuta el script de priorización una vez por semana | Máx. 1 GB (`--memory`) |
 
 ## 3. Requisitos previos
 
-**Servidor dedicado (recomendado):** una VM nueva con **Rocky Linux 10** (2 vCPU, 2-4 GB de RAM, 20 GB de disco),
-con un usuario administrador del grupo `wheel` con clave SSH (lo exige la plantilla de endurecimiento), en la misma red
-que el servidor Wazuh. En el servidor Wazuh hay que preparar cuatro cosas (sólo una vez):
-
-| # | En el servidor Wazuh (Amazon Linux 2023) | Cómo |
-|---|---|---|
-| a | **Grupo de seguridad de AWS**: permitir desde la IP de srv-vulnmgmt **9200/tcp**, **1514/tcp**, **1515/tcp** y, si se usa la API, **55000/tcp**. Desde ninguna otra IP. | Consola de EC2 → *Security groups* → *Inbound rules*. Si además corre `firewalld` en el servidor: `sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="<IP-srv-vulnmgmt>" port port="9200" protocol="tcp" accept'` (y lo mismo para 55000) y `sudo firewall-cmd --reload`. |
-| b | **Que el indexer escuche en la red**, no sólo en `127.0.0.1`. | `sudo ss -ltnp \| grep 9200`. Si muestra `127.0.0.1:9200`, poner `network.host: "0.0.0.0"` en `/etc/wazuh-indexer/opensearch.yml` y `sudo systemctl restart wazuh-indexer`. |
-| c | **Ver qué nombres tiene el certificado del indexer** (para que TLS se verifique sin errores). | `sudo ls /etc/wazuh-indexer/certs/` y, con el certificado del nodo (el `.pem` que no es `admin`, `root-ca` ni `*-key`): `sudo openssl x509 -in /etc/wazuh-indexer/certs/<nodo>.pem -noout -ext subjectAltName`. Si **no** aparece la IP del servidor Wazuh, anotar uno de los nombres `DNS:` que sí aparezcan: se pasa con `--indexer-name` (el rol lo agrega a `/etc/hosts` de srv-vulnmgmt). Si el certificado no tiene **ningún** nombre `DNS:` (sólo `IP:127.0.0.1`), hay que regenerar el certificado del nodo incluyendo la IP del servidor, con la herramienta de certificados de Wazuh (`wazuh-certs-tool.sh`). **No** se desactiva la verificación TLS. |
-| d | **Copiar la CA del indexer** a srv-vulnmgmt. | Desde srv-vulnmgmt: `sudo scp <admin>@<IP-wazuh>:/etc/wazuh-indexer/certs/root-ca.pem /root/wazuh-root-ca.pem` (o copiar el contenido a mano). Es un certificado público, no una clave. Si se copió desde Windows, quitarle los finales de línea CRLF (`sudo sed -i 's/
-$//' /root/wazuh-root-ca.pem`): con CRLF, Ansible no lo lee ("Empty certificate data"). |
-
-Además: la contraseña de `admin` del indexer (punto 3 de la lista siguiente), la versión del manager para fijar la del
-agente (`sudo /var/ossec/bin/wazuh-control info` → `WAZUH_VERSION`) y, después de instalar, las **reglas** en el manager
-(sección 4, paso 4).
-
-**Requisitos comunes a los dos modos:**
-
-1. **Servidor Wazuh 4.8 o superior *all-in-one*** (manager + indexer + dashboard), instalado con el asistente oficial
-   (`wazuh-install.sh -a`) o con la imagen oficial (Amazon Linux 2023). En el modo local (plataforma instalada en el
-   propio servidor Wazuh) ese servidor tiene que ser **Rocky Linux 9 o 10** o **Amazon Linux 2023**; **Amazon Linux 2 no
-   se admite** (trae Python 3.7 y el motor necesita 3.9 o superior). La detección de vulnerabilidades viene habilitada por
+1. **Servidor Wazuh 4.8 o superior *all-in-one*** (manager + indexer + dashboard), instalado con la imagen oficial
+   (**Amazon Linux 2023**) o con el asistente oficial (`wazuh-install.sh -a`) sobre **Rocky Linux 9 o 10**. **Amazon Linux 2
+   no se admite** (trae Python 3.7 y el motor necesita 3.9 o superior). La detección de vulnerabilidades viene habilitada por
    defecto (`<vulnerability-detection>` en `/var/ossec/etc/ossec.conf`, con `index-status` en `yes`). Para saber qué
-   sistema tiene un servidor:
+   sistema tiene el servidor:
 
    ```bash
    grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release; python3 --version
@@ -132,30 +106,24 @@ agente (`sudo /var/ossec/bin/wazuh-control info` → `WAZUH_VERSION`) y, despué
    Se usa **una sola vez** para crear el usuario de sólo lectura `vulnmgmt-reader`; no se guarda.
 4. Opcional: un usuario de la **API de Wazuh** con rol de sólo lectura, para mostrar la cobertura (agentes sin
    hallazgos y agentes desconectados).
-5. **RAM:** en el servidor dedicado, el motor está limitado a 512 MB y n8n a 1 GB (2 GB alcanzan, 4 GB es holgado).
-   En el modo local, Wazuh *all-in-one* necesita unos 8 GB y la plataforma suma esos mismos límites; sin n8n
-   (`-e vulnmgmt_n8n_enabled=false`) se suma sólo el motor.
-6. Salida a Internet durante la instalación: `docker.io` (imagen de n8n), `packages.wazuh.com` (agente) y los
-   repositorios de la distribución. En cada informe, opcionalmente, `cisa.gov` o `raw.githubusercontent.com` (KEV)
-   y `api.first.org` (EPSS). Sin Internet la plataforma sigue funcionando con la última caché.
+5. **RAM:** Wazuh *all-in-one* necesita unos 8 GB. La plataforma agrega poco: el motor está limitado a 512 MB y n8n a
+   1 GB. Sin n8n (`-e vulnmgmt_n8n_enabled=false`) el agregado es sólo el del motor.
+6. Salida a Internet durante la instalación: los repositorios de Amazon Linux (`nginx`, `docker`…) y `docker.io` (imagen
+   de n8n, sólo la primera vez). En cada informe, opcionalmente, `cisa.gov` o `raw.githubusercontent.com` (KEV) y
+   `api.first.org` (EPSS). Sin Internet la plataforma sigue funcionando con la última caché.
 
 ### Relación con el endurecimiento (punto 1)
 
-> **El servidor dedicado srv-vulnmgmt sí se endurece** con la plantilla del punto 1 (Rocky Linux 10, CIS RHEL 10 L1)
-> usando el perfil `profiles/vulnmgmt-server.yml`, que declara tres excepciones documentadas:
->
-> - **conserva `nginx`**: CIS 2.1.18 lo desinstala, y es lo que publica el panel;
-> - **permite el reenvío de puertos SSH** (CIS 5.1.10, que es de nivel 2), porque `ssh -L` es la única entrada al editor de n8n;
-> - **instala el agente Wazuh**, que envía al manager los logs del servidor y las alertas de la plataforma.
->
-> El puerto del panel (8443) lo abre el rol `vulnmgmt`, limitado a `vulnmgmt_allowed_networks`.
-
-> **Decisión del equipo: el servidor Wazuh no se endurece con la plantilla del punto 1.** Con el servidor dedicado,
-> sobre el servidor Wazuh sólo se instalan las reglas de alertas. El endurecimiento (`--component hardening`) se aplica
-> al resto de los servidores, incluido srv-vulnmgmt.
+> **Decisión del equipo: el servidor Wazuh no se endurece con la plantilla del punto 1.** En ese servidor sólo se
+> instala la plataforma de vulnerabilidades (`sudo ./bootstrap.sh --component vulnmgmt`). El endurecimiento
+> (`--component hardening`) se aplica al resto de los servidores.
 
 Consecuencias de esa decisión:
 
+- **No aplica ningún control CIS en el servidor Wazuh.** Por ejemplo, Docker activa el reenvío de IP al arrancar
+  (`net.ipv4.ip_forward=1`), que es su comportamiento normal; como el servidor no está endurecido, no hay control que lo
+  contradiga, y el rol no toca la configuración de Docker (`/etc/docker/daemon.json`). n8n usa la red del host, así que
+  tampoco depende de ese reenvío.
 - **Parches del propio servidor Wazuh:** sin el endurecimiento no hay `dnf-automatic`, así que sus actualizaciones las aplica
   el equipo a mano. El panel igual lo muestra como el agente 000, con su comando local (sección 6). Los componentes
   `wazuh-*` siempre se actualizan siguiendo la guía oficial de Wazuh.
@@ -178,75 +146,7 @@ agente en el propio manager (`hardening_siem_type: none`). El puerto del panel (
 
 ## 4. Instalación
 
-### Opción A — Servidor dedicado Rocky Linux 10 (recomendada)
-
-Antes, preparar el servidor Wazuh (sección 3, puntos a-d). Todo lo que sigue se ejecuta **en srv-vulnmgmt**;
-en los ejemplos el servidor Wazuh es `10.0.10.12`.
-
-**1. Clonar el repositorio:**
-
-```bash
-sudo dnf -y install git
-```
-
-```bash
-git clone https://github.com/Fabricio-Ramirez/SRDObligatorio.git && cd SRDObligatorio
-```
-
-**2. Endurecer el servidor e instalar el agente Wazuh** (fijar la versión del agente a la del manager):
-
-```bash
-sudo ./bootstrap.sh --component hardening --profile vulnmgmt-server --siem-host 10.0.10.12 -- -e hardening_wazuh_agent_version=<versión-del-manager>-1
-```
-
-Reiniciar si el resumen dice `REBOOT REQUIRED`, y verificar con `sudo ./scripts/verify.sh`. **Cada vez que se vuelva a
-endurecer este servidor hay que pasar `--profile vulnmgmt-server`**: sin el perfil, la plantilla desinstala nginx (el
-panel deja de funcionar) y vuelve a bloquear el túnel SSH hacia n8n. En el dashboard de Wazuh
-el agente `srv-vulnmgmt` tiene que aparecer como activo.
-
-**3. Instalar la plataforma** leyendo el Wazuh remoto:
-
-```bash
-sudo ./bootstrap.sh --component vulnmgmt --wazuh-host 10.0.10.12 --wazuh-ca /root/wazuh-root-ca.pem
-```
-
-Si el certificado del indexer no tiene la IP del servidor Wazuh (sección 3, punto c), agregar el nombre que sí tiene,
-por ejemplo `--indexer-name wazuh-indexer`. `bootstrap.sh` pide, sin mostrarla, la contraseña de `admin` del indexer.
-Con ella el rol crea por la red el usuario de sólo lectura `vulnmgmt-reader` y después ya no la usa ni la guarda.
-También pregunta por el usuario de la API, que es opcional. Antes de instalar nada, el rol comprueba que llega a
-`10.0.10.12:9200` y que existe la CA. Si algo falla, el mensaje indica qué revisar (grupo de seguridad, `network.host`,
-nombre del certificado). Al terminar muestra la URL del panel (`https://<IP-srv-vulnmgmt>:8443/`).
-
-**4. Instalar las reglas de alertas en el manager** (una sola vez, **en el servidor Wazuh**). Copiar
-`vulnmgmt/wazuh/vulnmgmt_rules.xml` del repositorio al servidor Wazuh (con `scp` o pegando el contenido) y:
-
-```bash
-sudo install -o wazuh -g wazuh -m 0660 vulnmgmt_rules.xml /var/ossec/etc/rules/vulnmgmt_rules.xml
-```
-
-```bash
-sudo /var/ossec/bin/wazuh-analysisd -t && sudo systemctl restart wazuh-manager
-```
-
-`wazuh-analysisd -t` valida las reglas **antes** de reiniciar: si da error, el manager no se reinicia y sigue
-funcionando con las reglas anteriores. Las reglas reconocen los eventos por su contenido JSON (`vulnmgmt.event`), así
-que aplican igual aunque lleguen por el agente de srv-vulnmgmt.
-
-**5. Si la plataforma estaba instalada en el servidor Wazuh** (versión anterior), desactivarla allí para no tener
-informes ni alertas duplicados:
-
-```bash
-sudo systemctl disable --now vulnmgmt.timer n8n.service
-```
-
-**Comprobar que llegan los datos** (en srv-vulnmgmt): `sudo systemctl start vulnmgmt.service` y después
-`journalctl -u vulnmgmt.service -n 30`. El log tiene que mostrar los hallazgos leídos del indexer remoto, y el panel
-tiene que mostrar los agentes de toda la red.
-
-### Opción B — En el propio servidor Wazuh (modo local)
-
-Era la opción anterior y sigue soportada. Sólo se usa si no hay un servidor dedicado: es el mismo comando **sin**
-`--wazuh-host`.
+### En el servidor Wazuh
 
 ```bash
 sudo dnf -y install git
@@ -269,24 +169,30 @@ y, opcionalmente, el usuario y la contraseña de la API, y ejecuta `vulnmgmt.yml
 archivo temporal con permisos 0600 que se borra al terminar; nunca aparecen en la línea de comandos.
 Al volver a ejecutarlo ya no pide la contraseña del indexer (usa el usuario de lectura creado).
 
-**En Amazon Linux 2023** el mismo comando funciona. Si la distribución no empaqueta `ansible-core`, `bootstrap.sh` lo
-instala en un entorno virtual de Python aparte (`/opt/srd-ansible`, `ansible-core` 2.14 o 2.15, que corren con Python 3.9)
-y lo usa desde ahí; no toca el Python del sistema. Si ya tenías el repositorio clonado, actualizarlo **antes** de
-ejecutar (el script no se actualiza a sí mismo al correr desde un clon):
+El rol instala **Docker** desde los repositorios de Amazon Linux 2023 (paquete `docker`), lo deja habilitado y levanta
+n8n como servicio `n8n.service`, que arranca el contenedor. La primera vez descarga la imagen de n8n desde `docker.io`.
 
-```bash
-git pull --ff-only
-```
+**En Amazon Linux 2023**, si la distribución no empaqueta `ansible-core`, `bootstrap.sh` lo instala en un entorno virtual
+de Python aparte (`/opt/srd-ansible`, `ansible-core` 2.14 o 2.15, que corren con Python 3.9) y lo usa desde ahí; no toca
+el Python del sistema.
 
 Si no hay `firewalld` activo (es lo habitual en Amazon Linux), el rol **no abre el puerto 8443** y lo avisa: hay que
-abrirlo con el firewall que se use (iptables, nftables o el grupo de seguridad de la nube).
+abrirlo en el grupo de seguridad de AWS (o con el firewall que se use), idealmente sólo desde la red de administración.
+
+**Comprobar que quedó funcionando:**
+
+```bash
+systemctl status vulnmgmt.timer docker n8n --no-pager
+```
+
+```bash
+curl -s http://127.0.0.1:5678/healthz        # n8n: debe responder {"status":"ok"}
+```
 
 ### Volver a ejecutar la instalación
 
-El comando es idempotente: sirve para actualizar el motor, el panel o la configuración. **En el servidor dedicado**
-se repite con las mismas opciones de la instalación (`--wazuh-host`, `--wazuh-ca` y, si se usó, `--indexer-name`);
-sin `--wazuh-host` el rol se detiene avisando que ese servidor no es el manager. Primero actualizar el repositorio
-(el script no se actualiza a sí mismo cuando se ejecuta desde un clon) y volver a lanzar:
+El comando es idempotente: sirve para actualizar el motor, el panel, n8n o la configuración. Primero actualizar el
+repositorio (el script no se actualiza a sí mismo cuando se ejecuta desde un clon) y volver a lanzar:
 
 ```bash
 cd <carpeta-del-repositorio> && git pull --ff-only
@@ -297,7 +203,7 @@ sudo ./bootstrap.sh --component vulnmgmt
 ```
 
 - **No vuelve a pedir** la contraseña de `admin` del indexer (usa el usuario de lectura que ya existe) y **conserva** la
-  contraseña del panel, el certificado, el usuario de lectura y el flujo ya importado en n8n.
+  contraseña del panel, el certificado, el usuario de lectura, los datos de n8n (`/var/lib/n8n`) y el flujo ya importado.
 - **Sí vuelve a preguntar por el usuario de la API de Wazuh.** Si se da Enter, la configuración se regenera **sin la API** y el
   panel pierde la cobertura de agentes (los desconectados o sin hallazgos). Para conservarla, **escribir de nuevo el usuario y
   la contraseña** cuando los pregunte (la contraseña no se muestra ni queda en el historial del shell). No conviene pasarla
@@ -315,11 +221,9 @@ sudo ./bootstrap.sh --component vulnmgmt --check
 sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_first_run=demo
 ```
 
-### Opción C — Desde un nodo de control
+### Desde un nodo de control
 
-Agregar srv-vulnmgmt al grupo `[vulnmgmt_server]` de `inventory/hosts.ini` (ver `inventory/hosts.ini.example`),
-copiar `host_vars/srv-vulnmgmt.yml.example` a `host_vars/srv-vulnmgmt.yml` y ajustar la IP del Wazuh. Endurecerlo con
-`ansible-playbook -i inventory/hosts.ini site-rocky10.yml -l srv-vulnmgmt -e @profiles/vulnmgmt-server.yml`, y
+Agregar el servidor Wazuh al grupo `[wazuh_server]` de `inventory/hosts.ini` (ver `inventory/hosts.ini.example`) y
 guardar las contraseñas cifradas con `ansible-vault`:
 
 ```bash
@@ -329,25 +233,36 @@ ansible-vault create secrets-vulnmgmt.yml
 (contenido: `vulnmgmt_indexer_admin_password: "..."`, y opcionalmente `vulnmgmt_api_user` / `vulnmgmt_api_password`)
 
 ```bash
-ansible-playbook -i inventory/hosts.ini vulnmgmt.yml -l srv-vulnmgmt -e @secrets-vulnmgmt.yml --ask-vault-pass
+ansible-playbook -i inventory/hosts.ini vulnmgmt.yml -l wazuh_server -e @secrets-vulnmgmt.yml --ask-vault-pass
 ```
-
-(Para el modo local, poner el servidor Wazuh en `[wazuh_server]` y no definir `vulnmgmt_wazuh_host`.)
 
 ### Qué hace el rol `roles/vulnmgmt`
 
 | Paso | Archivo |
 |---|---|
-| Valida el sistema operativo (Rocky 9/10 o Amazon Linux 2023), Python 3.9 o superior y las credenciales. En modo remoto: que exista la CA y que el indexer responda en 9200. En modo local: que sea el manager de Wazuh | `tasks/preflight.yml` |
+| Valida el sistema operativo (Amazon Linux 2023 o Rocky 9/10), Python 3.9 o superior, que sea el manager de Wazuh y que haya credenciales | `tasks/preflight.yml` |
 | Paquetes (python3, nginx, openssl…), usuario de servicio `vulnmgmt`, motor y panel, certificado TLS, secretos generados | `tasks/base.yml` |
-| Nombre del certificado en `/etc/hosts` (si se pasó `--indexer-name`), rol y usuario de **sólo lectura** en el indexer (sólo el índice de vulnerabilidades) y prueba de acceso | `tasks/indexer.yml` |
+| Prueba TLS contra el indexer, rol y usuario de **sólo lectura** (sólo el índice de vulnerabilidades) y prueba de acceso | `tasks/indexer.yml` |
 | Configuración del motor (`/etc/vulnmgmt/config.json`, 0640) y logrotate | `tasks/config.yml` |
-| nginx (HTTPS, usuario y contraseña, cabeceras de seguridad) y firewalld | `tasks/web.yml` |
-| Modo remoto: el agente Wazuh lee `events.json` (bloque `localfile` en su `ossec.conf`). Modo local: reglas en el manager y lectura de los eventos (`wazuh-analysisd -t` antes de reiniciar) | `tasks/wazuh.yml` |
-| Docker (paquete `docker` de Amazon Linux 2023, o `docker-ce` del repositorio oficial en Rocky), n8n como unidad systemd que lanza el contenedor; arma el flujo con el script de priorización y lo importa cuando cambió | `tasks/n8n.yml`, `templates/n8n.service.j2` |
+| nginx (HTTPS, usuario y contraseña, cabeceras de seguridad) y firewalld si está activo | `tasks/web.yml` |
+| Reglas de Wazuh en el manager y lectura de los eventos (`wazuh-analysisd -t` antes de reiniciar) | `tasks/wazuh.yml` |
+| **Docker** (paquete `docker` de Amazon Linux 2023) y n8n como unidad systemd que lanza el contenedor; arma el flujo con el script de priorización y lo importa cuando cambió | `tasks/n8n.yml`, `templates/n8n.service.j2` |
 | Servicio y temporizador, primer informe y resumen de acceso | `tasks/schedule.yml` |
 
 Es idempotente: se puede volver a ejecutar para actualizar el motor, el panel o la configuración.
+
+### Alternativa no utilizada: la plataforma en otro servidor
+
+> **El equipo no usa esta opción**: la plataforma y n8n corren en el servidor Wazuh. Se deja documentada porque el rol la
+> soporta, pero **no se validó en la maqueta**.
+
+El rol también puede instalarse en un servidor aparte (Rocky Linux 9/10) que lee el indexer de Wazuh por la red:
+`sudo ./bootstrap.sh --component vulnmgmt --wazuh-host <IP-wazuh> --wazuh-ca /root/wazuh-root-ca.pem` (más
+`--indexer-name <nombre>` si el certificado del indexer no incluye la IP). Requiere abrir 9200/tcp del servidor Wazuh sólo
+para ese servidor, que el indexer escuche en la red (`network.host`), copiar `root-ca.pem`, instalar a mano las reglas
+`vulnmgmt/wazuh/vulnmgmt_rules.xml` en el manager y endurecer el servidor con `--profile vulnmgmt-server`
+(`profiles/vulnmgmt-server.yml`). Las variables están en `roles/vulnmgmt/defaults/main.yml` (`vulnmgmt_wazuh_host`,
+`vulnmgmt_indexer_ca_source`, `vulnmgmt_indexer_tls_name`).
 
 ## 5. Uso diario
 
@@ -378,7 +293,7 @@ El panel muestra:
 
 ### Generar el informe en caliente
 
-El informe no hace falta esperarlo: se puede generar en cualquier momento, desde el servidor de la plataforma (srv-vulnmgmt, o el servidor Wazuh en el modo local), sin esperar al horario programado.
+El informe no hace falta esperarlo: se puede generar en cualquier momento, desde el servidor Wazuh, sin esperar al horario programado.
 
 ```bash
 sudo systemctl start vulnmgmt.service
@@ -501,7 +416,6 @@ Los cuatro insumos se combinan, en lugar de usar uno solo, porque cada uno respo
 | EPSS (0-1) | FIRST — probabilidad de explotación en los próximos 30 días | hasta 25 |
 | KEV | CISA *Known Exploited Vulnerabilities* — explotación activa confirmada | 15 |
 | Criticidad del servidor | `vulnmgmt_scoring.criticality` por nombre de agente o grupo de Wazuh | ×1,2 alta / ×1,0 media / ×0,8 baja |
-
 | Prioridad | Condición | Plazo (SLA) desde que se detectó |
 |---|---|---|
 | **P1** | CVE en KEV **o** riesgo ≥ 75 | 7 días (o la fecha límite de CISA si es anterior) |
@@ -683,9 +597,8 @@ eso no necesita la contraseña del panel.
 
 ## 10. Alertas en el SIEM
 
-El motor escribe eventos JSON en `/var/log/vulnmgmt/events.json`. En el servidor dedicado los lee el **agente Wazuh**
-de srv-vulnmgmt (`localfile` en formato `json`) y los envía al manager, que tiene las reglas instaladas (sección 4,
-paso 4). En el modo local los lee directamente el manager. Para no repetir alertas todos los días se emite un resumen por informe y, por cada acción P1/P2, sólo
+El motor escribe eventos JSON en `/var/log/vulnmgmt/events.json`, que el propio manager lee como `localfile`
+(formato `json`); las reglas las instala el rol en `/var/ossec/etc/rules/vulnmgmt_rules.xml`. Para no repetir alertas todos los días se emite un resumen por informe y, por cada acción P1/P2, sólo
 cuando es **nueva**, **escalada** o está **vencida**.
 
 | Regla | Nivel | Cuándo |
@@ -713,13 +626,12 @@ En el dashboard de Wazuh se buscan con `rule.groups: vulnmgmt`.
   HSTS, `X-Frame-Options`, `nosniff`, `no-referrer` y datos sin caché. El acceso se puede limitar a la red de
   administración o al bastión con `vulnmgmt_allowed_networks`.
 - **Servicios internos sólo en loopback:** n8n (5678). El motor no escucha en ningún puerto.
-- **Conexión con Wazuh (servidor dedicado):** el motor sólo **lee**. Al indexer se conecta con TLS verificado contra su
-  CA (`/etc/vulnmgmt/indexer-ca.pem`), nunca con la verificación desactivada; si el certificado no nombra la IP, se usa
-  uno de sus nombres (`vulnmgmt_indexer_tls_name`) en lugar de apagar la verificación. Los puertos 9200 y 55000 del
-  servidor Wazuh se abren **sólo** para la IP de srv-vulnmgmt. La API (opcional) usa un certificado autofirmado que
-  no se puede verificar: por eso se recomienda un usuario con rol `readonly`. El porqué está en la subsección
+- **Conexión con el indexer:** el motor sólo **lee**, por `127.0.0.1:9200` (el tráfico no sale del servidor), con TLS
+  verificado contra la CA del indexer (`/etc/vulnmgmt/indexer-ca.pem`), nunca con la verificación desactivada. El porqué
+  está en la subsección
   [*Por qué se verifica el certificado del indexer*](#por-qué-se-verifica-el-certificado-del-indexer-protección-contra-spoofing).
-- **Endurecimiento:** srv-vulnmgmt aplica CIS RHEL 10 L1 con tres excepciones documentadas (sección 3).
+- **n8n en Docker:** el contenedor usa la red del host pero escucha **sólo en 127.0.0.1:5678**, corre sin capacidades
+  (`--cap-drop ALL`), con `no-new-privileges` y con un límite de memoria. Al editor se entra con un túnel SSH.
 - **Integridad del software:** imagen de n8n con versión fija (`docker.io/n8nio/n8n:2.46.4`).
 - **Script de n8n:** no construye comandos con datos del indexer ni ejecuta nada en los servidores; sólo
   lee el informe y arma texto (sección 9).
@@ -729,13 +641,18 @@ En el dashboard de Wazuh se buscan con `rule.groups: vulnmgmt`.
 
 ### Por qué se verifica el certificado del indexer (protección contra *spoofing*)
 
-Esta decisión de diseño responde a un criterio de **seguridad**. Al pasar la plataforma a un servidor dedicado, los
-datos dejan de quedarse dentro de una sola máquina (antes el motor leía `127.0.0.1`) y ahora **cruzan la red** entre
-srv-vulnmgmt y el servidor Wazuh. Por eso el motor tiene que comprobar **con quién** habla, no sólo cifrar la conexión.
+Esta decisión de diseño responde a un criterio de **seguridad**. El motor le envía credenciales al indexer (la
+contraseña de `admin` en la instalación y la de `vulnmgmt-reader` todos los días) y confía en los hallazgos que recibe.
+Por eso no alcanza con cifrar la conexión: tiene que comprobar **con quién** habla.
 
-**El riesgo: suplantación del indexer (*spoofing* / *man-in-the-middle*).** Si srv-vulnmgmt aceptara cualquier
-certificado, un equipo de la misma red podría hacerse pasar por el indexer de Wazuh. Le bastaría con un *ARP spoofing*,
-una entrada DNS falsa o tomar la IP del servidor. Así podría:
+**Cómo es hoy:** la plataforma corre en el servidor Wazuh y se conecta a `127.0.0.1:9200`, así que el tráfico **no sale
+del servidor** y nadie en la red puede interceptarlo. Aun así, la verificación TLS se mantiene como **defensa en
+profundidad**: si el indexer se detuviera y otro proceso ocupara el puerto 9200, no podría presentar un certificado
+válido y el motor no le entregaría la contraseña ni tomaría sus datos.
+
+**El riesgo que evita: suplantación del indexer (*spoofing* / *man-in-the-middle*).** Si el motor aceptara cualquier
+certificado (y sobre todo si alguna vez la conexión pasara por la red, como en la alternativa de la sección 4), un equipo
+podría hacerse pasar por el indexer de Wazuh, con un *ARP spoofing*, una entrada DNS falsa o tomando su IP. Así podría:
 
 | Ataque | Consecuencia |
 |---|---|
@@ -746,31 +663,27 @@ una entrada DNS falsa o tomar la IP del servidor. Así podría:
 **La defensa: TLS con verificación completa.** El motor y Ansible sólo aceptan la conexión si se cumplen las dos
 condiciones de TLS:
 
-1. **El certificado está firmado por la CA de Wazuh.** Por eso se copia `root-ca.pem` del servidor Wazuh a srv-vulnmgmt
-   (`--wazuh-ca`): es la autoridad con la que el asistente de Wazuh firmó el certificado del indexer. Un impostor no
-   tiene la clave privada de esa CA, así que no puede presentar un certificado válido. `root-ca.pem` es un certificado
-   **público**: copiarlo no expone ningún secreto.
-2. **El certificado corresponde a la dirección a la que se conecta** (campo *subjectAltName*). Los certificados que genera
-   Wazuh suelen incluir `127.0.0.1` o un nombre como `wazuh-indexer`, pero no siempre la IP de red del servidor. Si no la
-   incluyen, la conexión se rechaza ("IP address mismatch"). Para esos casos existe `--indexer-name`: el rol agrega
-   `<IP-wazuh> <nombre>` a `/etc/hosts` de srv-vulnmgmt y se conecta con el nombre que sí está en el certificado. Así la
-   verificación sigue siendo **completa**.
+1. **El certificado está firmado por la CA de Wazuh** (`/etc/wazuh-indexer/certs/root-ca.pem`, que el rol copia a
+   `/etc/vulnmgmt/indexer-ca.pem`). Es la autoridad con la que el asistente de Wazuh firmó el certificado del indexer. Un
+   impostor no tiene la clave privada de esa CA, así que no puede presentar un certificado válido. `root-ca.pem` es un
+   certificado **público**: copiarlo no expone ningún secreto.
+2. **El certificado corresponde a la dirección a la que se conecta** (campo *subjectAltName*): en la instalación de Wazuh
+   incluye `127.0.0.1`, que es justamente la dirección que usa el motor.
 
-**Lo que no se hace, a propósito:** desactivar la verificación (`verify_tls: false` o `curl -k`). Funcionaría al
-instante, pero dejaría la conexión cifrada **con cualquiera**, también con el impostor: equivale a no tener protección
-frente a un *spoofing*. Por eso, si el certificado no tiene ningún nombre utilizable, la solución documentada es
-regenerarlo incluyendo la IP (sección 3, punto c), no apagar la verificación.
+**Lo que no se hace, a propósito:** desactivar la verificación (`verify_tls: false` o `curl -k`). Funcionaría igual, pero
+dejaría la conexión cifrada **con cualquiera**, también con un impostor: equivale a no tener protección frente a un
+*spoofing*.
 
 **Defensa en profundidad.** La verificación TLS se complementa con:
 
-- el grupo de seguridad de AWS, que abre 9200 y 55000 **sólo** para la IP de srv-vulnmgmt;
 - el usuario `vulnmgmt-reader`, que sólo puede **leer** el índice de vulnerabilidades: aunque se filtrara su contraseña,
   no permite modificar Wazuh;
-- la contraseña de `admin`, que se usa una sola vez y no se guarda en srv-vulnmgmt.
+- la contraseña de `admin`, que se usa una sola vez y no se guarda;
+- el puerto 9200, que no hace falta abrir hacia afuera: la plataforma lo usa por `127.0.0.1`.
 
 **Límite conocido: la API de Wazuh (55000, opcional).** La API viene con un certificado autofirmado que no está firmado
-por ninguna CA, así que no se puede verificar de la misma forma. Por eso es opcional y se recomienda usarla sólo con un
-usuario de rol `readonly`, con el puerto abierto únicamente para srv-vulnmgmt. Si no se usa, el informe de
+por ninguna CA, así que no se puede verificar de la misma forma; como la plataforma la consulta por `127.0.0.1`, el
+tráfico tampoco sale del servidor. Se recomienda un usuario de rol `readonly`. Si no se usa, el informe de
 vulnerabilidades y su priorización funcionan igual: la API sólo aporta la cobertura de agentes.
 
 ## 12. Variables principales
@@ -779,9 +692,7 @@ Todas están en `roles/vulnmgmt/defaults/main.yml`.
 
 | Variable | Defecto | Uso |
 |---|---|---|
-| `vulnmgmt_wazuh_host` | `""` (modo local) | IP o nombre del servidor Wazuh que se lee por la red (`--wazuh-host`). Vacío = la plataforma está en el propio servidor Wazuh. |
-| `vulnmgmt_indexer_ca_source` | `/root/wazuh-root-ca.pem` (remoto) | Copia de la CA del indexer (`--wazuh-ca`). En modo local, `/etc/wazuh-indexer/certs/root-ca.pem`. |
-| `vulnmgmt_indexer_tls_name` | `""` | Nombre del certificado del indexer, si no contiene la IP (`--indexer-name`); se agrega a `/etc/hosts`. |
+| `vulnmgmt_wazuh_host` | `""` | Vacío = la plataforma está en el servidor Wazuh (lo que usa el equipo). Sólo para la alternativa no utilizada (sección 4). |
 | `vulnmgmt_indexer_admin_password` | `""` | Contraseña de `admin` del indexer (una sola vez, para crear el usuario de lectura). |
 | `vulnmgmt_api_user` / `vulnmgmt_api_password` | `""` | API de Wazuh (opcional, cobertura de agentes). |
 | `vulnmgmt_scoring` | ver sección 7 | Pesos, umbrales, SLA y criticidad por servidor o grupo. |
@@ -799,11 +710,11 @@ Todas están en `roles/vulnmgmt/defaults/main.yml`.
 ## 13. Archivos
 
 ```text
-vulnmgmt.yml                       # Playbook (grupos vulnmgmt_server y wazuh_server)
+vulnmgmt.yml                       # Playbook (se ejecuta en el servidor Wazuh)
 roles/vulnmgmt/                    # Rol de instalación (tareas, plantillas, variables)
-profiles/vulnmgmt-server.yml       # Excepciones del endurecimiento para srv-vulnmgmt (--profile)
-host_vars/srv-vulnmgmt.yml.example # Variables de srv-vulnmgmt para un nodo de control
+roles/vulnmgmt/templates/n8n.service.j2  # Unidad systemd que lanza n8n con Docker
 host_vars/srv-siem.yml.example     # Excepciones del endurecimiento si algún día se endureciera el servidor Wazuh
+profiles/vulnmgmt-server.yml       # Sólo para la alternativa no utilizada (sección 4)
 vulnmgmt/
 ├── engine/vulnmgmt/               # Motor (Python 3.9+, sólo librería estándar)
 │   ├── wazuh.py                   #   indexer (scroll) y API de Wazuh
@@ -827,14 +738,9 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
 
 | Síntoma | Causa / solución |
 |---|---|
-| *Preflight*: "Local mode installs the platform on the Wazuh server" | Se ejecutó en srv-vulnmgmt sin `--wazuh-host`: agregar `--wazuh-host <IP-wazuh>`. |
-| *Preflight*: "... was not found. Copy the indexer root CA" | Falta la CA en srv-vulnmgmt: sección 3, punto d, o indicar la ruta con `--wazuh-ca`. |
-| *Preflight*: "<IP>:9200 does not answer" | Grupo de seguridad de AWS o `firewalld` del servidor Wazuh sin la regla para srv-vulnmgmt, o el indexer escucha sólo en `127.0.0.1` (sección 3, puntos a y b). Probar desde srv-vulnmgmt: `curl -k https://<IP-wazuh>:9200` (debe responder 401; `-k` sólo sirve para probar que el puerto responde, sin enviar credenciales: la plataforma siempre verifica el certificado). Si el fallo fue en la **primera** instalación, borrar `sudo rm /etc/vulnmgmt/indexer.secret` antes de reintentar, para que `bootstrap.sh` vuelva a pedir la contraseña de `admin` y cree el usuario de lectura. |
-| `Abort if the TLS connection to the indexer fails` con "IP address mismatch", "hostname mismatch" o `CERTIFICATE_VERIFY_FAILED` | El certificado del indexer no nombra la IP: pasar `--indexer-name <nombre-DNS-del-certificado>` (sección 3, punto c). Si dice que no confía en el emisor, la CA copiada no es la correcta. Con "Empty certificate data", la CA tiene finales de línea CRLF (sección 3, punto d). En la **primera** instalación, borrar `sudo rm /etc/vulnmgmt/indexer.secret` antes de reintentar. |
+| `Abort if the TLS connection to the indexer fails` | El certificado del indexer no es válido para `127.0.0.1` o no lo firmó `/etc/wazuh-indexer/certs/root-ca.pem` (por ejemplo, si se regeneraron los certificados de Wazuh): volver a ejecutar el rol, que copia la CA actual. En la **primera** instalación, borrar `sudo rm /etc/vulnmgmt/indexer.secret` antes de reintentar. |
 | `Abort if the engine cannot read the vulnerability index` con 401 | El usuario de lectura no existe (por ejemplo, la primera instalación falló a mitad): `sudo rm /etc/vulnmgmt/indexer.secret` y volver a ejecutar; `bootstrap.sh` pide de nuevo la contraseña de `admin`. |
-| El agente `srv-vulnmgmt` no aparece en Wazuh | Puertos 1514/1515 en el grupo de seguridad; versión del agente más nueva que el manager (fijarla con `hardening_wazuh_agent_version`); `sudo tail /var/ossec/logs/ossec.log` en srv-vulnmgmt. |
-| No aparecen las alertas `rule.groups: vulnmgmt` | Faltan las reglas en el manager (sección 4, paso 4) o el agente no está activo. |
-| *Preflight*: "Remote mode must not run on the Wazuh server itself" | Se pasó `--wazuh-host` en el propio servidor Wazuh: ahí usar el modo local (sin `--wazuh-host`). |
+| No aparecen las alertas `rule.groups: vulnmgmt` | Ver que exista `/var/ossec/etc/rules/vulnmgmt_rules.xml` y el bloque `vulnmgmt` en `/var/ossec/etc/ossec.conf`; volver a ejecutar el rol (valida con `wazuh-analysisd -t` y reinicia el manager). |
 | *Preflight*: faltan credenciales del indexer | Pasar la contraseña de `admin` (sección 3). |
 | El panel dice "Todavía no hay informes" o muestra 0 hallazgos | El motor aún no corrió o los agentes todavía no enviaron el inventario: `systemctl start vulnmgmt.service` más tarde, o usar el modo `demo`. |
 | `journalctl -u vulnmgmt.service` muestra error 401/403 del indexer | Recrear el usuario de lectura: `sudo rm /etc/vulnmgmt/indexer.secret` y volver a ejecutar `sudo ./bootstrap.sh --component vulnmgmt` (pide la contraseña de `admin` y genera una nueva). |
@@ -849,7 +755,6 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
 | `firewalld is not running ... NOT opened` | No hay `firewalld`: abrir el puerto 8443/tcp con el firewall que se use. |
 | `skipping: no hosts matched` al ejecutar el playbook | El nombre del agente de Wazuh no existe en el inventario: usarlo como alias en `inventory/hosts.ini` (sección 6). |
 | El panel no abre desde la red | `firewall-cmd --list-all` y `vulnmgmt_allowed_networks`; `systemctl status nginx`. |
-| nginx desapareció de srv-vulnmgmt, o `ssh -L 5678:...` dejó de funcionar | Se volvió a endurecer sin `--profile vulnmgmt-server`. Repetir el endurecimiento con el perfil y después `sudo ./bootstrap.sh --component vulnmgmt --wazuh-host ...` (reinstala nginx y su configuración). |
 | nginx desapareció tras endurecer el servidor Wazuh | Falta `host_vars` con `hardening_packages_keep: [nginx]` (sección 3); volver a ejecutar el rol `vulnmgmt`. |
 
 ## 15. Pruebas realizadas y limitaciones
@@ -911,16 +816,6 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
   `systemd-analyze verify` no marca errores y que el paquete elegido es `docker` en Amazon y `docker-ce` en Rocky.
   Falta confirmar en el servidor Wazuh: `dnf install docker`, la descarga de la imagen de n8n, que n8n responda en
   `127.0.0.1:5678` y la importación del flujo con `docker exec`.
-
-- **Servidor dedicado (modo remoto): no se ejecutó sobre VMs reales.** Lo probado, en Rocky Linux 10.2 (WSL) con
-  ansible-core 2.16: `--syntax-check` de `vulnmgmt.yml` y `site-rocky10.yml` con el perfil, las URL derivadas en los tres
-  casos (local, remoto y remoto con `--indexer-name`), el *preflight* real en cuatro situaciones (servidor que no es
-  Wazuh sin `--wazuh-host`, CA faltante, puerto 9200 cerrado y puerto abierto), el texto de los mensajes de error, y las
-  opciones nuevas de `bootstrap.sh` con `dnf`/`ansible` simulados. **TLS real** contra un servidor HTTPS con un certificado
-  firmado por una CA propia cuyo SAN es sólo `DNS:localhost`: por IP, la sonda corta con la pista de `--indexer-name`; con
-  el nombre, conecta y verifica (Ansible `uri` y el cliente HTTP del motor), y en `--check` no se interrumpe. Falta comprobar en la maqueta: la conexión al indexer
-  de la imagen de Amazon Linux (puerto, `network.host` y nombres del certificado), la creación remota del usuario de
-  lectura, el enrolamiento del agente en Rocky 10 y que las alertas lleguen al manager por el agente.
 
 - No se ejecutó el rol completo sobre una VM (Rocky 9/10 o Amazon Linux 2023) con Wazuh real (systemd, SELinux *enforcing*,
   firewalld y Docker reales).
