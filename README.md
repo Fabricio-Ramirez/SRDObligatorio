@@ -400,6 +400,42 @@ Rocky/RHEL). La **plataforma de vulnerabilidades** corre en el servidor dedicado
 | Seguridad de la conexión con Wazuh | El Rocky 10 lee el indexer por HTTPS **verificando su certificado** contra la CA de Wazuh (`root-ca.pem`) y su nombre, para que ningún equipo de la red pueda hacerse pasar por el indexer (*spoofing*), robar las credenciales o entregar hallazgos falsos. Nunca se desactiva la verificación. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#por-qué-se-verifica-el-certificado-del-indexer-protección-contra-spoofing). |
 | Explicabilidad | La priorización y los textos salen de código auditable: las mismas entradas dan siempre el mismo resultado, sin modelos de lenguaje. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#8-priorización-determinística). |
 
+### Cómo se prioriza (motor Python)
+
+La priorización la hace `vulnmgmt/engine/vulnmgmt/prioritize.py` (función `analyse()`). Es determinística: con los
+mismos datos da siempre el mismo resultado.
+
+**Entradas:** **CVSS** (gravedad, de Wazuh), **EPSS** (probabilidad de explotación en 30 días, de FIRST), **KEV** (si ya
+se explota activamente, catálogo de CISA) y la **criticidad** del servidor (alta 1.2, media 1.0, baja 0.8). Si Wazuh no
+trae CVSS, se usa el piso de su severidad (Critical 9.0, High 7.0, Medium 4.0, Low 0.1).
+
+```text
+riesgo = min(100, (CVSS × 6  +  EPSS × 25  +  15 si está en KEV) × criticidad)
+```
+
+| Prioridad | Regla | Plazo (SLA) |
+|---|---|---|
+| **P1** | En KEV, **o** riesgo ≥ 75 | 7 días |
+| **P2** | Riesgo ≥ 55 | 30 días |
+| **P3** | Riesgo ≥ 35 | 90 días |
+| **P4** | El resto | 180 días |
+
+El CVSS aporta como máximo 60 puntos, así que una vulnerabilidad **no es P1 sólo por ser grave**: tiene que estar en
+KEV o tener además una probabilidad de explotación alta. Por ejemplo, CVSS 9.8 con EPSS 2 % da 59,3 (P2), y CVSS 4.0
+en KEV es P1.
+
+- **Una acción por paquete:** los hallazgos (CVE × servidor) se agrupan por paquete, porque actualizarlo resuelve todas
+  sus CVE. La acción toma la **peor** prioridad y el **mayor** riesgo de sus hallazgos, y es *actualizar* (hay versión
+  corregida), *mitigar* (sin parche) o *revisar*.
+- **Plazo y seguimiento:** vence en la fecha de primera detección + SLA (o antes, si CISA fija una fecha más cercana).
+  Entre informes se marcan las acciones nuevas, escaladas, vencidas y resueltas.
+- **Orden final:** prioridad (P1 → P4), después riesgo de mayor a menor, y ante un empate el nombre del paquete. El
+  script de n8n no cambia prioridades: sólo desempata dentro de cada una (ransomware, vencidas, KEV, riesgo).
+- **Ajustes:** pesos, umbrales, SLA y criticidad por servidor o grupo se cambian con `vulnmgmt_scoring`, sin tocar el
+  código. Cada acción guarda en `reasons` por qué tiene su prioridad, y el panel lo muestra.
+
+Detalle completo en [`docs/vulnmgmt.md`](docs/vulnmgmt.md#7-metodología-de-priorización).
+
 **Decisión del equipo: el servidor Wazuh no se endurece con la plantilla del punto 1.** El servidor dedicado srv-vulnmgmt
 sí se endurece, con tres excepciones documentadas en `profiles/vulnmgmt-server.yml`: conserva nginx, permite el túnel SSH
 hacia n8n e instala el agente Wazuh. Detalle y consecuencias en [`docs/vulnmgmt.md`](docs/vulnmgmt.md#relación-con-el-endurecimiento-punto-1).
