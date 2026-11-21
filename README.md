@@ -235,7 +235,6 @@ Punto 5 — Gestión de vulnerabilidades (ver sección 12 y docs/vulnmgmt.md)
 ├── vulnmgmt.yml                 # Playbook (grupos vulnmgmt_server y wazuh_server)
 ├── profiles/vulnmgmt-server.yml # Excepciones del endurecimiento para el servidor dedicado
 ├── roles/vulnmgmt/              # Rol de instalación
-│   ├── tasks/ollama_cleanup.yml #   Desinstala la IA local de versiones anteriores
 │   ├── tasks/n8n.yml            #   n8n (Podman) e importación del flujo
 │   └── templates/vulnmgmt-workflow.json.j2  # Flujo de n8n (incrusta el script de abajo)
 ├── vulnmgmt/engine/vulnmgmt/    # Motor Python (KEV/EPSS, prioridad P1-P4, SLA, remediación)
@@ -397,29 +396,13 @@ Rocky/RHEL). La **plataforma de vulnerabilidades** corre en el servidor dedicado
 | Informes periódicos | Temporizador diario (03:30) y también **en caliente** con `sudo systemctl start vulnmgmt.service` (ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#generar-el-informe-en-caliente)): panel web HTTPS en `https://<srv-vulnmgmt>:8443`, CSV, histórico y alertas en Wazuh (reglas 100800-100808). |
 | Acciones priorizadas y viables | Riesgo con CVSS + EPSS + CISA KEV + criticidad del servidor; prioridad P1-P4 con plazo (SLA), seguimiento de vencidas, escaladas y resueltas. |
 | **Resolver las vulnerabilidades (remediación)** | Por servidor, comandos listos para copiar (`sudo dnf upgrade -y --disablerepo='wazuh*' <paquetes>`) y un playbook de Ansible (`remediation.yml`) con simulación previa (`--check --diff`), filtro por prioridad (`--tags P1`) y aviso de reinicio. La plataforma **no ejecuta nada**: lo aplica el equipo desde el bastión. Los componentes de Wazuh, las acciones sin parche y los gestores no soportados quedan como trabajo manual. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#6-remediación-de-las-vulnerabilidades). |
-| No-code (valor agregado) | n8n Community Edition con un flujo semanal: un **script determinístico** (nodo *Code*) ordena las acciones por urgencia, propone la solución y la verificación de cada una, las agrupa en ventanas de mantenimiento y arma el aviso para infraestructura. Reemplaza a la IA local (Ollama) que usaban versiones anteriores. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#9-flujo-no-code-n8n). |
+| No-code (valor agregado) | n8n Community Edition con un flujo semanal: un **script determinístico** (nodo *Code*) ordena las acciones por urgencia, propone la solución y la verificación de cada una, las agrupa en ventanas de mantenimiento y arma el aviso para infraestructura. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#9-flujo-no-code-n8n). |
 | Seguridad de la conexión con Wazuh | El Rocky 10 lee el indexer por HTTPS **verificando su certificado** contra la CA de Wazuh (`root-ca.pem`) y su nombre, para que ningún equipo de la red pueda hacerse pasar por el indexer (*spoofing*), robar las credenciales o entregar hallazgos falsos. Nunca se desactiva la verificación. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#por-qué-se-verifica-el-certificado-del-indexer-protección-contra-spoofing). |
-| Explicabilidad | La priorización y los textos salen de código auditable: las mismas entradas dan siempre el mismo resultado, sin modelos de lenguaje. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#8-sin-ia-local-qué-cambió-y-por-qué). |
+| Explicabilidad | La priorización y los textos salen de código auditable: las mismas entradas dan siempre el mismo resultado, sin modelos de lenguaje. Ver [`docs/vulnmgmt.md`](docs/vulnmgmt.md#8-priorización-determinística). |
 
 **Decisión del equipo: el servidor Wazuh no se endurece con la plantilla del punto 1.** El servidor dedicado srv-vulnmgmt
 sí se endurece, con tres excepciones documentadas en `profiles/vulnmgmt-server.yml`: conserva nginx, permite el túnel SSH
 hacia n8n e instala el agente Wazuh. Detalle y consecuencias en [`docs/vulnmgmt.md`](docs/vulnmgmt.md#relación-con-el-endurecimiento-punto-1).
-
-### Si ya tenías la plataforma instalada (quita de la IA local)
-
-Versiones anteriores instalaban un modelo de lenguaje local (**Ollama** + Qwen2.5) para redactar el resumen.
-Ese modelo se quitó: ahora el plan priorizado lo arma el script de n8n y el resumen lo calcula el motor.
-
-Al volver a ejecutar el rol, **se desinstala Ollama**: el servicio, el binario y los modelos descargados
-(≈ 1,5 GB en `/usr/share/ollama`). No se pierde nada irrecuperable —es una *release* pública y los modelos
-se vuelven a descargar—, pero es un cambio con efecto en el servidor. Para conservar la instalación:
-
-```bash
-sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_remove_ollama=false
-```
-
-Después de actualizar conviene generar un informe (`sudo systemctl start vulnmgmt.service`) para que el panel
-tome el formato nuevo. Detalle completo en [`docs/vulnmgmt.md`](docs/vulnmgmt.md#8-sin-ia-local-qué-cambió-y-por-qué).
 
 ## 13. Uso de IA generativa
 
