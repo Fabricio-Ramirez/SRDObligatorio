@@ -47,3 +47,8 @@
       - >-
         {{ 'n8n: ssh -L 5678:127.0.0.1:5678 <admin>@<este-servidor> y abrir http://localhost:5678
         (crear la cuenta de propietario la primera vez)' if vulnmgmt_n8n_enabled | bool else 'n8n deshabilitado' }}
+      - >-
+        {{ ('Origen de datos: Wazuh en ' ~ vulnmgmt_wazuh_host ~ ' (indexer ' ~ vulnmgmt_indexer_url ~ ').'
+            ~ (' Alertas: instalar una vez vulnmgmt/wazuh/vulnmgmt_rules.xml en el manager (docs/vulnmgmt.md, sección 4).'
+               if vulnmgmt_wazuh_rules | bool else ''))
+           if vulnmgmt_remote | bool else 'Origen de datos: Wazuh local (este servidor).' }}

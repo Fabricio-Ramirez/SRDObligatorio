@@ -1,11 +1,13 @@
 ---
-# Vulnerability management platform (assignment item 5). Runs on the Wazuh
-# server itself (manager + indexer).
+# Vulnerability management platform (assignment item 5).
 #
-# Local run (see bootstrap.sh --component vulnmgmt):
-#   ansible-playbook vulnmgmt.yml -e vulnmgmt_indexer_admin_password=...
-- name: Vulnerability management on the Wazuh server
-  hosts: wazuh_server
+# Recommended: a dedicated Rocky Linux 10 server (group vulnmgmt_server) that
+# reads the Wazuh indexer over the network:
+#   bootstrap.sh --component vulnmgmt --wazuh-host <wazuh-ip>
+#   ansible-playbook vulnmgmt.yml -e vulnmgmt_wazuh_host=<wazuh-ip> -e vulnmgmt_indexer_admin_password=...
+# Also supported: on the Wazuh server itself (group wazuh_server, no vulnmgmt_wazuh_host).
+- name: Vulnerability management platform
+  hosts: vulnmgmt_server:wazuh_server
   become: true
   gather_facts: true
   roles:

@@ -1,7 +1,11 @@
 ---
 # =============================================================================
-# Vulnerability management platform (assignment item 5) - runs ON the Wazuh
-# server (all-in-one: manager + indexer + dashboard, Wazuh >= 4.8).
+# Vulnerability management platform (assignment item 5). Two deployment modes:
+#
+#   remote (recommended): a dedicated Rocky Linux 10 server reads the Wazuh
+#           indexer and API over the network. Set vulnmgmt_wazuh_host.
+#   local:  installed on the Wazuh server itself (all-in-one: manager +
+#           indexer + dashboard, Wazuh >= 4.8). vulnmgmt_wazuh_host empty.
 #
 # Secrets (passwords) must be passed with --extra-vars / ansible-vault; the
 # role never writes them into the repository.
@@ -18,10 +22,28 @@ vulnmgmt_min_python: "3.9"
 vulnmgmt_allow_untested_platform: false
 vulnmgmt_managed_comment: "Managed by Ansible (role: vulnmgmt) - local changes will be overwritten"
 
+# --- Where Wazuh is ------------------------------------------------------------
+# IP / FQDN of the Wazuh server (manager + indexer). Empty = local mode (this
+# server IS the Wazuh server). Set = remote mode (dedicated server).
+vulnmgmt_wazuh_host: ""
+vulnmgmt_remote: "{{ vulnmgmt_wazuh_host | length > 0 }}"
+# Remote mode: name written in the indexer certificate (subjectAltName) when it
+# does not contain vulnmgmt_wazuh_host. The role maps it to vulnmgmt_wazuh_host
+# in /etc/hosts and connects with that name, so TLS stays fully verified.
+# Find it on the Wazuh server with:
+#   openssl x509 -in /etc/wazuh-indexer/certs/<node>.pem -noout -ext subjectAltName
+vulnmgmt_indexer_tls_name: ""
+
 # --- Wazuh indexer (source of the vulnerability data) -------------------------
-vulnmgmt_indexer_url: https://127.0.0.1:9200
-# CA that signed the indexer certificate (Wazuh install assistant default).
-vulnmgmt_indexer_ca_source: /etc/wazuh-indexer/certs/root-ca.pem
+vulnmgmt_indexer_address: >-
+  {{ vulnmgmt_indexer_tls_name if vulnmgmt_indexer_tls_name | length > 0
+     else (vulnmgmt_wazuh_host if vulnmgmt_remote | bool else '127.0.0.1') }}
+vulnmgmt_indexer_url: "https://{{ vulnmgmt_indexer_address }}:9200"
+# CA that signed the indexer certificate. Local mode: the Wazuh install
+# assistant default. Remote mode: copy root-ca.pem from the Wazuh server
+# (/etc/wazuh-indexer/certs/root-ca.pem) to this path before installing.
+vulnmgmt_indexer_ca_source: >-
+  {{ '/root/wazuh-root-ca.pem' if vulnmgmt_remote | bool else '/etc/wazuh-indexer/certs/root-ca.pem' }}
 vulnmgmt_indexer_verify_tls: true
 vulnmgmt_indexer_index: wazuh-states-vulnerabilities-*
 # Least privilege: with the admin credentials the role creates a dedicated
@@ -36,11 +58,14 @@ vulnmgmt_indexer_user: ""
 vulnmgmt_indexer_password: ""
 
 # --- Wazuh server API (optional: agent inventory / coverage) ------------------
-vulnmgmt_api_url: https://127.0.0.1:55000
+vulnmgmt_api_url: "https://{{ vulnmgmt_wazuh_host if vulnmgmt_remote | bool else '127.0.0.1' }}:55000"
 vulnmgmt_api_user: ""          # e.g. a user with the "readonly" RBAC role
 vulnmgmt_api_password: ""
-# The API ships a self-signed certificate for its own hostname; on loopback
-# the traffic never leaves the host.
+# The API ships a self-signed certificate that no CA signs. In local mode the
+# traffic never leaves the host. In remote mode the credentials cross the
+# network inside TLS that is NOT verified: use a user with the "readonly" RBAC
+# role only, and allow 55000/tcp on the Wazuh server ONLY from this server.
+# The API is optional (agent inventory / coverage): leave the user empty to skip it.
 vulnmgmt_api_verify_tls: false
 
 # --- Threat intelligence ---------------------------------------------------------
@@ -82,6 +107,10 @@ vulnmgmt_engine_cpu_quota: 50%
 vulnmgmt_engine_memory_max: 512M
 
 # --- SIEM integration (alerts in Wazuh) ----------------------------------------
+# Local mode: the rules are installed in the manager and it reads events.json.
+# Remote mode: the Wazuh agent of this server ships events.json to the manager;
+# the rules (vulnmgmt/wazuh/vulnmgmt_rules.xml) are installed once on the manager
+# by hand (docs/vulnmgmt.md, section 4).
 vulnmgmt_wazuh_rules: true
 vulnmgmt_wazuh_event_priorities: [P1, P2]
 

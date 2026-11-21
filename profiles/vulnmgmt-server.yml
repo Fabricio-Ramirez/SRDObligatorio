@@ -1,0 +1,26 @@
+---
+# Hardening profile for the dedicated vulnerability management server
+# (Rocky Linux 10, assignment item 5). Documented exceptions to the CIS
+# template, needed by the platform installed afterwards with vulnmgmt.yml.
+#
+# Used by:  bootstrap.sh --component hardening --profile vulnmgmt-server --siem-host <wazuh-ip>
+# or:       ansible-playbook site-rocky10.yml -e @profiles/vulnmgmt-server.yml -e hardening_siem_host=<wazuh-ip>
+#
+# It is loaded as extra vars: a later "-e name=value" still overrides it.
+
+# CIS 2.1.18 removes nginx, but nginx publishes the vulnerability dashboard (8443/tcp).
+hardening_packages_keep: [nginx]
+
+# CIS 5.1.10 (DisableForwarding, Level 2) would block "ssh -L 5678:127.0.0.1:5678",
+# the only way into the n8n editor (it listens on 127.0.0.1 only).
+hardening_ssh_disable_forwarding: false
+
+# The Wazuh agent (hardening_siem_type: wazuh) enrols in the Wazuh server and ships
+# the platform alerts (/var/log/vulnmgmt/events.json, added by vulnmgmt.yml).
+# The agent must not be newer than the manager: pin it to the manager version
+# ("/var/ossec/bin/wazuh-control info" on the Wazuh server), e.g.
+#   -e hardening_wazuh_agent_version=4.12.0-1
+hardening_siem_type: wazuh
+
+# The dashboard port (8443/tcp) is opened by vulnmgmt.yml itself
+# (restricted to vulnmgmt_allowed_networks when that list is not empty).

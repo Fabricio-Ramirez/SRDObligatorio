@@ -3,9 +3,11 @@
 # bootstrap.sh - installs and runs one component of this repository on THIS server:
 #
 #   --component hardening (default)  CIS Benchmark Level 1 hardening. Rocky Linux 9 / 10 only.
-#   --component vulnmgmt             Vulnerability management platform. Runs on the Wazuh
-#                                    server: Rocky Linux 9 / 10 or Amazon Linux 2023
-#                                    (the operating system of the official Wazuh image).
+#   --component vulnmgmt             Vulnerability management platform. Recommended on a
+#                                    dedicated Rocky Linux 10 server that reads the Wazuh
+#                                    indexer over the network (--wazuh-host). Without
+#                                    --wazuh-host it installs on the Wazuh server itself
+#                                    (Rocky Linux 9 / 10 or Amazon Linux 2023).
 #
 # Each component checks the operating system it needs; one never blocks the other.
 #
@@ -21,6 +23,11 @@
 #   curl -fsSL https://raw.githubusercontent.com/Fabricio-Ramirez/SRDObligatorio/HEAD/bootstrap.sh \
 #     | sudo bash -s -- --siem-host 10.0.10.12        # without a clone
 #
+# Dedicated vulnerability management server (Rocky Linux 10), Wazuh at 10.0.10.12:
+#   ./bootstrap.sh --component hardening --profile vulnmgmt-server --siem-host 10.0.10.12
+#   (reboot)
+#   ./bootstrap.sh --component vulnmgmt --wazuh-host 10.0.10.12 --wazuh-ca /root/wazuh-root-ca.pem
+#
 # Run "./bootstrap.sh --help" for every option.
 # =============================================================================
 set -Eeuo pipefail
@@ -34,6 +41,10 @@ SIEM_HOST="${SIEM_HOST:-}"
 COMPONENT="${COMPONENT:-hardening}"   # hardening | vulnmgmt
 OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"   # overridable only to test the detection
 VENV_DIR="${VENV_DIR:-/opt/srd-ansible}"                # ansible-core fallback (outside the repository)
+WAZUH_HOST="${WAZUH_HOST:-}"              # vulnmgmt: Wazuh server address (empty = local mode)
+WAZUH_CA="${WAZUH_CA:-}"                  # vulnmgmt: copy of the indexer root-ca.pem
+INDEXER_NAME="${INDEXER_NAME:-}"          # vulnmgmt: name in the indexer certificate
+PROFILE="${PROFILE:-}"                    # profiles/<name>.yml loaded as extra vars
 CHECK_MODE=0
 TAGS=""
 EXTRA_ARGS=()
@@ -48,10 +59,15 @@ Usage: $0 [options] [-- extra ansible-playbook arguments]
 
 Options:
   --component NAME     hardening (default; Rocky Linux 9/10 only) or vulnmgmt (vulnerability
-                       management platform, only on the Wazuh server: Rocky Linux 9/10
+                       management platform: dedicated Rocky Linux 9/10 server with
+                       --wazuh-host, or on the Wazuh server itself: Rocky Linux 9/10
                        or Amazon Linux 2023)
   --siem-host HOST     Wazuh manager / syslog collector address (required unless --siem-type none)
   --siem-type TYPE     wazuh (default), syslog or none
+  --profile NAME       Load profiles/NAME.yml (exceptions for a server role), e.g. vulnmgmt-server
+  --wazuh-host HOST    vulnmgmt: Wazuh server whose indexer (9200/tcp) is read over the network
+  --wazuh-ca PATH      vulnmgmt: copy of the Wazuh indexer root-ca.pem (default /root/wazuh-root-ca.pem)
+  --indexer-name NAME  vulnmgmt: name in the indexer certificate, when it does not contain --wazuh-host
   --branch NAME        Git branch to use (default: repository default branch)
   --repo URL           Git repository URL (default: ${REPO_URL})
   --dir PATH           Where to clone the repository (default: ${INSTALL_DIR})
@@ -60,7 +76,7 @@ Options:
   -h, --help           Show this help
 
 Environment variables with the same meaning: COMPONENT, SIEM_HOST, SIEM_TYPE,
-REPO_URL, REPO_BRANCH, INSTALL_DIR. For --component vulnmgmt the passwords can
+REPO_URL, REPO_BRANCH, INSTALL_DIR, PROFILE, WAZUH_HOST, WAZUH_CA, INDEXER_NAME. For --component vulnmgmt the passwords can
 also come from VULNMGMT_INDEXER_ADMIN_PASSWORD, VULNMGMT_API_USER and
 VULNMGMT_API_PASSWORD; otherwise they are asked interactively.
 EOF
@@ -76,6 +92,10 @@ while [[ $# -gt 0 ]]; do
     --dir)       INSTALL_DIR="${2:?--dir needs a value}"; shift 2 ;;
     --check)     CHECK_MODE=1; shift ;;
     --tags)      TAGS="${2:?--tags needs a value}"; shift 2 ;;
+    --profile)   PROFILE="${2:?--profile needs a value}"; shift 2 ;;
+    --wazuh-host) WAZUH_HOST="${2:?--wazuh-host needs a value}"; shift 2 ;;
+    --wazuh-ca)  WAZUH_CA="${2:?--wazuh-ca needs a value}"; shift 2 ;;
+    --indexer-name) INDEXER_NAME="${2:?--indexer-name needs a value}"; shift 2 ;;
     -h|--help)   usage; exit 0 ;;
     --)          shift; EXTRA_ARGS=("$@"); break ;;
     *)           usage; die "Unknown option: $1" ;;
@@ -111,6 +131,21 @@ case "${COMPONENT}" in
     esac ;;
   *) die "Unknown component: ${COMPONENT} (use hardening or vulnmgmt)." ;;
 esac
+
+if [[ "${COMPONENT}" != "vulnmgmt" && -n "${WAZUH_HOST}${WAZUH_CA}${INDEXER_NAME}" ]]; then
+  die "--wazuh-host, --wazuh-ca and --indexer-name apply only to --component vulnmgmt."
+fi
+if [[ -z "${WAZUH_HOST}" && -n "${WAZUH_CA}${INDEXER_NAME}" ]]; then
+  die "--wazuh-ca and --indexer-name need --wazuh-host (they configure the remote mode)."
+fi
+# The CA path is used after "cd" into the repository: make it absolute now.
+if [[ -n "${WAZUH_CA}" ]]; then
+  [[ -f "${WAZUH_CA}" ]] || die "--wazuh-ca: ${WAZUH_CA} does not exist (copy /etc/wazuh-indexer/certs/root-ca.pem from the Wazuh server)."
+  WAZUH_CA="$(cd "$(dirname "${WAZUH_CA}")" && pwd)/$(basename "${WAZUH_CA}")"
+fi
+if [[ -n "${PROFILE}" && ! "${PROFILE}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  die "--profile takes a name from profiles/ (letters, digits, - and _), e.g. vulnmgmt-server."
+fi
 
 # The playbook stops early if no SIEM address is configured anywhere
 # (--siem-host or group_vars/all.yml).
@@ -167,6 +202,9 @@ else
     || die "git clone failed. If the repository is private, use a deploy key or a read-only token (see README)."
 fi
 cd "${INSTALL_DIR}"
+if [[ -n "${PROFILE}" && ! -f "profiles/${PROFILE}.yml" ]]; then
+  die "Unknown profile ${PROFILE}: profiles/${PROFILE}.yml does not exist."
+fi
 
 # --- 4. Ansible collection ----------------------------------------------------
 if ansible-galaxy collection list ansible.posix 2>/dev/null | grep -q '^ansible\.posix '; then
@@ -190,6 +228,8 @@ ANSIBLE_LOG_PATH="${LOG_DIR}/ansible-$(date +%Y%m%d-%H%M%S).log"
 export ANSIBLE_LOG_PATH
 
 playbook_args=(-i inventory/localhost.ini "${PLAYBOOK}")
+# First, so that the explicit options below (later -e values win) override it.
+[[ -n "${PROFILE}" ]] && playbook_args+=(-e "@profiles/${PROFILE}.yml")
 
 # Secrets for vulnmgmt go through a private temporary vars file, never on the
 # command line (where any user could read them in the process list).
@@ -214,6 +254,11 @@ json.dump({"vulnmgmt_indexer_admin_password": os.environ.get("VULNMGMT_INDEXER_A
     "${SECRETS_FILE}"
   playbook_args+=(-e "@${SECRETS_FILE}")
 fi
+if [[ "${COMPONENT}" == "vulnmgmt" ]]; then
+  [[ -n "${WAZUH_HOST}" ]]   && playbook_args+=(-e "vulnmgmt_wazuh_host=${WAZUH_HOST}")
+  [[ -n "${WAZUH_CA}" ]]     && playbook_args+=(-e "vulnmgmt_indexer_ca_source=${WAZUH_CA}")
+  [[ -n "${INDEXER_NAME}" ]] && playbook_args+=(-e "vulnmgmt_indexer_tls_name=${INDEXER_NAME}")
+fi
 if [[ "${COMPONENT}" == "hardening" ]]; then
   [[ -n "${SIEM_TYPE}" ]] && playbook_args+=(-e "hardening_siem_type=${SIEM_TYPE}")
   [[ -n "${SIEM_HOST}" ]] && playbook_args+=(-e "hardening_siem_host=${SIEM_HOST}")
@@ -228,6 +273,9 @@ ansible-playbook "${playbook_args[@]}"
 
 if [[ "${COMPONENT}" == "vulnmgmt" ]]; then
   log "Done. The dashboard URL and how to reach n8n are shown in the summary above."
+  if [[ -n "${WAZUH_HOST}" ]]; then
+    log "Remote mode: install vulnmgmt/wazuh/vulnmgmt_rules.xml once on the Wazuh manager (docs/vulnmgmt.md, section 4)."
+  fi
 else
   log "Done. Report saved in /var/log/hardening-report.txt"
   log "Reboot if the summary above says 'REBOOT REQUIRED', then verify with: ${INSTALL_DIR}/scripts/verify.sh"

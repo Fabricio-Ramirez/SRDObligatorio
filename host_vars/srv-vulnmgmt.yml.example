@@ -1,0 +1,23 @@
+---
+# Example host_vars for the dedicated vulnerability management server
+# (Rocky Linux 10) when it is managed from a control node:
+#   cp host_vars/srv-vulnmgmt.yml.example host_vars/srv-vulnmgmt.yml
+#   ansible-playbook -i inventory/hosts.ini site-rocky10.yml -l srv-vulnmgmt -e @profiles/vulnmgmt-server.yml
+#   ansible-playbook -i inventory/hosts.ini vulnmgmt.yml -l srv-vulnmgmt -e vulnmgmt_indexer_admin_password=...
+# With bootstrap.sh (run ON the server) none of this is needed: use
+# --profile vulnmgmt-server and --wazuh-host instead (see README, section 12).
+
+# Wazuh server (manager + indexer). Its address is also the SIEM of the hardening.
+vulnmgmt_wazuh_host: 10.0.10.12
+hardening_siem_host: 10.0.10.12
+
+# Root CA of the Wazuh indexer, copied from the Wazuh server
+# (/etc/wazuh-indexer/certs/root-ca.pem).
+vulnmgmt_indexer_ca_source: /root/wazuh-root-ca.pem
+
+# Only if the indexer certificate does not contain 10.0.10.12 in its
+# subjectAltName: one of the names it does contain (added to /etc/hosts).
+# vulnmgmt_indexer_tls_name: wazuh-indexer
+
+# Networks allowed to open the dashboard (bastion / admin VPN). Empty = any.
+vulnmgmt_allowed_networks: ["10.0.10.10/32"]

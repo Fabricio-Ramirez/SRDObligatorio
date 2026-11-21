@@ -1,4 +1,5 @@
 ---
+# --- Local mode: this server is the Wazuh manager ------------------------------
 - name: SIEM | Install the vulnerability management rules
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/vulnmgmt/wazuh/vulnmgmt_rules.xml"
@@ -7,6 +8,7 @@
     group: wazuh
     mode: "0660"
   register: vulnmgmt_rules_file
+  when: not (vulnmgmt_remote | bool)
 
 - name: SIEM | Read the engine events with the Wazuh manager
   ansible.builtin.blockinfile:
@@ -21,9 +23,47 @@
         </localfile>
       </ossec_config>
   register: vulnmgmt_ossec_conf
+  when: not (vulnmgmt_remote | bool)
 
 # A broken rule or ossec.conf would stop the manager: test before restarting.
 - name: SIEM | Validate the manager configuration and rules
   ansible.builtin.command: /var/ossec/bin/wazuh-analysisd -t
   changed_when: vulnmgmt_rules_file is changed or vulnmgmt_ossec_conf is changed
   notify: Restart wazuh-manager
+  when: not (vulnmgmt_remote | bool)
+
+# --- Remote mode: the Wazuh agent of this server ships the events ---------------
+# The agent is installed by the hardening (site-rocky10.yml, hardening_siem_type=wazuh).
+# The rules live on the manager: install vulnmgmt/wazuh/vulnmgmt_rules.xml there once.
+- name: SIEM | Look for the Wazuh agent
+  ansible.builtin.stat:
+    path: /var/ossec/bin/wazuh-agentd
+  register: vulnmgmt_wazuh_agent
+  when: vulnmgmt_remote | bool
+
+- name: SIEM | Ship the engine events with the Wazuh agent
+  ansible.builtin.blockinfile:
+    path: /var/ossec/etc/ossec.conf
+    marker: "<!-- {mark} ANSIBLE MANAGED BLOCK: vulnmgmt -->"
+    insertafter: EOF
+    block: |
+      <ossec_config>
+        <localfile>
+          <log_format>json</log_format>
+          <location>/var/log/vulnmgmt/events.json</location>
+        </localfile>
+      </ossec_config>
+  notify: Restart wazuh-agent
+  when:
+    - vulnmgmt_remote | bool
+    - vulnmgmt_wazuh_agent.stat.exists
+
+- name: SIEM | Warn when there is no Wazuh agent to ship the events
+  ansible.builtin.debug:
+    msg: >-
+      The Wazuh agent is not installed on this server: the P1/P2 alerts will NOT reach Wazuh.
+      Install it with the hardening (bootstrap.sh --component hardening --siem-host {{ vulnmgmt_wazuh_host }})
+      and run this installation again.
+  when:
+    - vulnmgmt_remote | bool
+    - not vulnmgmt_wazuh_agent.stat.exists

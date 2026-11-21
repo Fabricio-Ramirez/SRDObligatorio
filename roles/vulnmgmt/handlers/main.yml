@@ -9,6 +9,11 @@
     name: wazuh-manager
     state: restarted
 
+- name: Restart wazuh-agent
+  ansible.builtin.systemd:
+    name: wazuh-agent
+    state: restarted
+
 - name: Restart n8n
   ansible.builtin.systemd:
     name: n8n

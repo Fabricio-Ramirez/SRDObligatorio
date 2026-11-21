@@ -23,17 +23,66 @@
       {{ ansible_facts['python_version'] }} (Amazon Linux 2 ships Python 3.7: use Amazon Linux 2023).
     quiet: true
 
+# wazuh-analysisd exists only on the manager (an agent also ships wazuh-control).
 - name: Preflight | Look for the Wazuh manager
   ansible.builtin.stat:
-    path: /var/ossec/bin/wazuh-control
-  register: vulnmgmt_wazuh_control
+    path: /var/ossec/bin/wazuh-analysisd
+  register: vulnmgmt_wazuh_manager
 
-- name: Preflight | Abort if this is not the Wazuh server
+- name: Preflight | Abort if this is not the Wazuh server (local mode)
   ansible.builtin.assert:
-    that: vulnmgmt_wazuh_control.stat.exists
+    that: vulnmgmt_wazuh_manager.stat.exists
     fail_msg: >-
-      This playbook must run on the Wazuh server (manager + indexer). /var/ossec/bin/wazuh-control was not found.
+      Local mode installs the platform on the Wazuh server (manager + indexer), but
+      /var/ossec/bin/wazuh-analysisd was not found. To install it on a dedicated server,
+      give the Wazuh server address: -e vulnmgmt_wazuh_host=<ip> (bootstrap.sh --wazuh-host <ip>).
     quiet: true
+  when: not (vulnmgmt_remote | bool)
+
+- name: Preflight | Remote mode must not run on the Wazuh server itself
+  ansible.builtin.assert:
+    that: not vulnmgmt_wazuh_manager.stat.exists
+    fail_msg: >-
+      This server is a Wazuh manager: install in local mode (without vulnmgmt_wazuh_host / --wazuh-host).
+    quiet: true
+  when: vulnmgmt_remote | bool
+
+- name: Preflight | Look for the Wazuh indexer CA (remote mode)
+  ansible.builtin.stat:
+    path: "{{ vulnmgmt_indexer_ca_source }}"
+  register: vulnmgmt_remote_ca
+  when: vulnmgmt_remote | bool
+
+- name: Preflight | Require the Wazuh indexer CA (remote mode)
+  ansible.builtin.assert:
+    that: vulnmgmt_remote_ca.stat.exists
+    fail_msg: >-
+      {{ vulnmgmt_indexer_ca_source }} was not found. Copy the indexer root CA from the Wazuh server
+      (/etc/wazuh-indexer/certs/root-ca.pem) to this path, e.g.
+      scp <admin>@{{ vulnmgmt_wazuh_host }}:/etc/wazuh-indexer/certs/root-ca.pem {{ vulnmgmt_indexer_ca_source }}
+      (or pass another path with -e vulnmgmt_indexer_ca_source=... / bootstrap.sh --wazuh-ca).
+    quiet: true
+  when: vulnmgmt_remote | bool
+
+- name: Preflight | Check that the Wazuh indexer port is reachable (remote mode)
+  ansible.builtin.wait_for:
+    host: "{{ vulnmgmt_wazuh_host }}"
+    port: 9200
+    timeout: 10
+  register: vulnmgmt_indexer_port
+  failed_when: false
+  when: vulnmgmt_remote | bool
+
+- name: Preflight | Abort if the Wazuh indexer is not reachable (remote mode)
+  ansible.builtin.assert:
+    # failed_when: false above hides the failure flag; a success reports state "started".
+    that: vulnmgmt_indexer_port.state | default('') == 'started'
+    fail_msg: >-
+      {{ vulnmgmt_wazuh_host }}:9200 does not answer. On the Wazuh server: allow 9200/tcp from this
+      server in the AWS security group (and in firewalld if it runs), and check that the indexer is not
+      listening on loopback only ("ss -ltnp | grep 9200"; network.host in /etc/wazuh-indexer/opensearch.yml).
+    quiet: true
+  when: vulnmgmt_remote | bool
 
 - name: Preflight | Look for an existing reader secret
   ansible.builtin.stat:
@@ -59,4 +108,15 @@
       This server has {{ ansible_facts['memtotal_mb'] }} MB of RAM. Wazuh all-in-one needs about 8 GB.
       The engine itself is limited to {{ vulnmgmt_engine_memory_max }} and n8n to
       {{ vulnmgmt_n8n_memory_max }}; install without n8n with -e vulnmgmt_n8n_enabled=false.
-  when: ansible_facts['memtotal_mb'] < 9000
+  when:
+    - not (vulnmgmt_remote | bool)
+    - ansible_facts['memtotal_mb'] < 9000
+
+- name: Preflight | Report a VM that is small for the platform (remote mode)
+  ansible.builtin.debug:
+    msg: >-
+      This server has {{ ansible_facts['memtotal_mb'] }} MB of RAM. The engine uses up to
+      {{ vulnmgmt_engine_memory_max }} and n8n up to {{ vulnmgmt_n8n_memory_max }}: 2 GB or more is recommended.
+  when:
+    - vulnmgmt_remote | bool
+    - ansible_facts['memtotal_mb'] < 1900

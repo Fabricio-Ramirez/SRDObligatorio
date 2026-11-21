@@ -1,4 +1,18 @@
 ---
+# Remote mode: when the indexer certificate does not name the IP used to reach
+# it, connect with the name it does carry and resolve that name to the server.
+- name: Indexer | Resolve the indexer certificate name to the Wazuh server
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ vulnmgmt_indexer_tls_name | regex_escape }}(\s|$)'
+    line: "{{ vulnmgmt_wazuh_host }} {{ vulnmgmt_indexer_tls_name }}  # {{ vulnmgmt_managed_comment }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - vulnmgmt_remote | bool
+    - vulnmgmt_indexer_tls_name | length > 0
+
 - name: Indexer | Look for the indexer root CA
   ansible.builtin.stat:
     path: "{{ vulnmgmt_indexer_ca_source }}"
@@ -77,7 +91,21 @@
   retries: 5
   delay: 5
   until: vulnmgmt_index_count.status == 200
+  failed_when: false
   no_log: true
+
+# The task above hides its output (credentials); explain the usual causes here.
+- name: Indexer | Abort if the engine cannot read the vulnerability index
+  ansible.builtin.fail:
+    msg: >-
+      {{ vulnmgmt_indexer_url }} answered "{{ vulnmgmt_index_count.msg | default('') | truncate(200) }}"
+      (HTTP {{ vulnmgmt_index_count.status | default('-') }}).
+      {{ 'Certificate errors ("hostname mismatch"): the indexer certificate does not name '
+         ~ vulnmgmt_indexer_address ~ '; set vulnmgmt_indexer_tls_name (bootstrap.sh --indexer-name) to a name '
+         ~ 'from its subjectAltName. ' if vulnmgmt_remote | bool else '' }}401/403: wrong credentials or the
+      read-only user was not created. 404: the index {{ vulnmgmt_indexer_index }} does not exist yet
+      (enable the Wazuh vulnerability detection).
+  when: vulnmgmt_index_count.status | default(0) != 200
 
 - name: Indexer | Report the number of vulnerability documents
   ansible.builtin.debug:
