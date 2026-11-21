@@ -111,7 +111,8 @@ que el servidor Wazuh. En el servidor Wazuh hay que preparar cuatro cosas (sólo
 | a | **Grupo de seguridad de AWS**: permitir desde la IP de srv-vulnmgmt **9200/tcp**, **1514/tcp**, **1515/tcp** y, si se usa la API, **55000/tcp**. Desde ninguna otra IP. | Consola de EC2 → *Security groups* → *Inbound rules*. Si además corre `firewalld` en el servidor: `sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="<IP-srv-vulnmgmt>" port port="9200" protocol="tcp" accept'` (y lo mismo para 55000) y `sudo firewall-cmd --reload`. |
 | b | **Que el indexer escuche en la red**, no sólo en `127.0.0.1`. | `sudo ss -ltnp \| grep 9200`. Si muestra `127.0.0.1:9200`, poner `network.host: "0.0.0.0"` en `/etc/wazuh-indexer/opensearch.yml` y `sudo systemctl restart wazuh-indexer`. |
 | c | **Ver qué nombres tiene el certificado del indexer** (para que TLS se verifique sin errores). | `sudo ls /etc/wazuh-indexer/certs/` y, con el certificado del nodo (el `.pem` que no es `admin`, `root-ca` ni `*-key`): `sudo openssl x509 -in /etc/wazuh-indexer/certs/<nodo>.pem -noout -ext subjectAltName`. Si **no** aparece la IP del servidor Wazuh, anotar uno de los nombres `DNS:` que sí aparezcan: se pasa con `--indexer-name` (el rol lo agrega a `/etc/hosts` de srv-vulnmgmt). Si el certificado no tiene **ningún** nombre `DNS:` (sólo `IP:127.0.0.1`), hay que regenerar el certificado del nodo incluyendo la IP del servidor, con la herramienta de certificados de Wazuh (`wazuh-certs-tool.sh`). **No** se desactiva la verificación TLS. |
-| d | **Copiar la CA del indexer** a srv-vulnmgmt. | Desde srv-vulnmgmt: `sudo scp <admin>@<IP-wazuh>:/etc/wazuh-indexer/certs/root-ca.pem /root/wazuh-root-ca.pem` (o copiar el contenido a mano). Es un certificado público, no una clave. Si se copió desde Windows, quitarle los finales de línea CRLF (`sudo sed -i 's/$//' /root/wazuh-root-ca.pem`): con CRLF, Ansible no lo lee ("Empty certificate data"). |
+| d | **Copiar la CA del indexer** a srv-vulnmgmt. | Desde srv-vulnmgmt: `sudo scp <admin>@<IP-wazuh>:/etc/wazuh-indexer/certs/root-ca.pem /root/wazuh-root-ca.pem` (o copiar el contenido a mano). Es un certificado público, no una clave. Si se copió desde Windows, quitarle los finales de línea CRLF (`sudo sed -i 's/
+$//' /root/wazuh-root-ca.pem`): con CRLF, Ansible no lo lee ("Empty certificate data"). |
 
 Además: la contraseña de `admin` del indexer (punto 3 de la lista siguiente), la versión del manager para fijar la del
 agente (`sudo /var/ossec/bin/wazuh-control info` → `WAZUH_VERSION`) y, después de instalar, las **reglas** en el manager
@@ -742,7 +743,8 @@ En el dashboard de Wazuh se buscan con `rule.groups: vulnmgmt`.
   CA (`/etc/vulnmgmt/indexer-ca.pem`), nunca con la verificación desactivada; si el certificado no nombra la IP, se usa
   uno de sus nombres (`vulnmgmt_indexer_tls_name`) en lugar de apagar la verificación. Los puertos 9200 y 55000 del
   servidor Wazuh se abren **sólo** para la IP de srv-vulnmgmt. La API (opcional) usa un certificado autofirmado que
-  no se puede verificar: por eso se recomienda un usuario con rol `readonly`.
+  no se puede verificar: por eso se recomienda un usuario con rol `readonly`. El porqué está en la subsección
+  [*Por qué se verifica el certificado del indexer*](#por-qué-se-verifica-el-certificado-del-indexer-protección-contra-spoofing).
 - **Endurecimiento:** srv-vulnmgmt aplica CIS RHEL 10 L1 con tres excepciones documentadas (sección 3).
 - **Integridad del software:** imagen de n8n con versión fija (`docker.io/n8nio/n8n:2.46.4`).
 - **Script de n8n:** no construye comandos con datos del indexer ni ejecuta nada en los servidores; sólo
@@ -750,6 +752,52 @@ En el dashboard de Wazuh se buscan con `rule.groups: vulnmgmt`.
 - **CSV:** se neutralizan las celdas que empiezan con `=`, `+`, `-`, `@`, tabulador o retorno de carro, para evitar inyección de fórmulas en Excel.
 - **SELinux** en modo *enforcing*: certificado en `/etc/pki/tls`, puerto 8443 ya etiquetado `http_port_t`,
   volúmenes de n8n con `:Z`.
+
+### Por qué se verifica el certificado del indexer (protección contra *spoofing*)
+
+Esta decisión de diseño responde a un criterio de **seguridad**. Al pasar la plataforma a un servidor dedicado, los
+datos dejan de quedarse dentro de una sola máquina (antes el motor leía `127.0.0.1`) y ahora **cruzan la red** entre
+srv-vulnmgmt y el servidor Wazuh. Por eso el motor tiene que comprobar **con quién** habla, no sólo cifrar la conexión.
+
+**El riesgo: suplantación del indexer (*spoofing* / *man-in-the-middle*).** Si srv-vulnmgmt aceptara cualquier
+certificado, un equipo de la misma red podría hacerse pasar por el indexer de Wazuh. Le bastaría con un *ARP spoofing*,
+una entrada DNS falsa o tomar la IP del servidor. Así podría:
+
+| Ataque | Consecuencia |
+|---|---|
+| **Robo de credenciales** | En la instalación viaja la contraseña de `admin` del indexer (control total de Wazuh); todos los días, la de `vulnmgmt-reader`. |
+| **Datos falsos** | El atacante entrega hallazgos inventados u omite los reales: una vulnerabilidad crítica (P1, KEV) desaparece del informe, del orden de prioridades, del plan de n8n y de las alertas. El equipo de infraestructura trabaja sobre un informe manipulado sin saberlo. |
+| **Ocultar un ataque en curso** | Si el atacante ya explota una vulnerabilidad, puede borrarla del informe para que nadie la parchee. |
+
+**La defensa: TLS con verificación completa.** El motor y Ansible sólo aceptan la conexión si se cumplen las dos
+condiciones de TLS:
+
+1. **El certificado está firmado por la CA de Wazuh.** Por eso se copia `root-ca.pem` del servidor Wazuh a srv-vulnmgmt
+   (`--wazuh-ca`): es la autoridad con la que el asistente de Wazuh firmó el certificado del indexer. Un impostor no
+   tiene la clave privada de esa CA, así que no puede presentar un certificado válido. `root-ca.pem` es un certificado
+   **público**: copiarlo no expone ningún secreto.
+2. **El certificado corresponde a la dirección a la que se conecta** (campo *subjectAltName*). Los certificados que genera
+   Wazuh suelen incluir `127.0.0.1` o un nombre como `wazuh-indexer`, pero no siempre la IP de red del servidor. Si no la
+   incluyen, la conexión se rechaza ("IP address mismatch"). Para esos casos existe `--indexer-name`: el rol agrega
+   `<IP-wazuh> <nombre>` a `/etc/hosts` de srv-vulnmgmt y se conecta con el nombre que sí está en el certificado. Así la
+   verificación sigue siendo **completa**.
+
+**Lo que no se hace, a propósito:** desactivar la verificación (`verify_tls: false` o `curl -k`). Funcionaría al
+instante, pero dejaría la conexión cifrada **con cualquiera**, también con el impostor: equivale a no tener protección
+frente a un *spoofing*. Por eso, si el certificado no tiene ningún nombre utilizable, la solución documentada es
+regenerarlo incluyendo la IP (sección 3, punto c), no apagar la verificación.
+
+**Defensa en profundidad.** La verificación TLS se complementa con:
+
+- el grupo de seguridad de AWS, que abre 9200 y 55000 **sólo** para la IP de srv-vulnmgmt;
+- el usuario `vulnmgmt-reader`, que sólo puede **leer** el índice de vulnerabilidades: aunque se filtrara su contraseña,
+  no permite modificar Wazuh;
+- la contraseña de `admin`, que se usa una sola vez y no se guarda en srv-vulnmgmt.
+
+**Límite conocido: la API de Wazuh (55000, opcional).** La API viene con un certificado autofirmado que no está firmado
+por ninguna CA, así que no se puede verificar de la misma forma. Por eso es opcional y se recomienda usarla sólo con un
+usuario de rol `readonly`, con el puerto abierto únicamente para srv-vulnmgmt. Si no se usa, el informe de
+vulnerabilidades y su priorización funcionan igual: la API sólo aporta la cobertura de agentes.
 
 ## 12. Variables principales
 
@@ -808,7 +856,7 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
 |---|---|
 | *Preflight*: "Local mode installs the platform on the Wazuh server" | Se ejecutó en srv-vulnmgmt sin `--wazuh-host`: agregar `--wazuh-host <IP-wazuh>`. |
 | *Preflight*: "... was not found. Copy the indexer root CA" | Falta la CA en srv-vulnmgmt: sección 3, punto d, o indicar la ruta con `--wazuh-ca`. |
-| *Preflight*: "<IP>:9200 does not answer" | Grupo de seguridad de AWS o `firewalld` del servidor Wazuh sin la regla para srv-vulnmgmt, o el indexer escucha sólo en `127.0.0.1` (sección 3, puntos a y b). Probar desde srv-vulnmgmt: `curl -k https://<IP-wazuh>:9200` (debe responder 401). Si el fallo fue en la **primera** instalación, borrar `sudo rm /etc/vulnmgmt/indexer.secret` antes de reintentar, para que `bootstrap.sh` vuelva a pedir la contraseña de `admin` y cree el usuario de lectura. |
+| *Preflight*: "<IP>:9200 does not answer" | Grupo de seguridad de AWS o `firewalld` del servidor Wazuh sin la regla para srv-vulnmgmt, o el indexer escucha sólo en `127.0.0.1` (sección 3, puntos a y b). Probar desde srv-vulnmgmt: `curl -k https://<IP-wazuh>:9200` (debe responder 401; `-k` sólo sirve para probar que el puerto responde, sin enviar credenciales: la plataforma siempre verifica el certificado). Si el fallo fue en la **primera** instalación, borrar `sudo rm /etc/vulnmgmt/indexer.secret` antes de reintentar, para que `bootstrap.sh` vuelva a pedir la contraseña de `admin` y cree el usuario de lectura. |
 | `Abort if the TLS connection to the indexer fails` con "IP address mismatch", "hostname mismatch" o `CERTIFICATE_VERIFY_FAILED` | El certificado del indexer no nombra la IP: pasar `--indexer-name <nombre-DNS-del-certificado>` (sección 3, punto c). Si dice que no confía en el emisor, la CA copiada no es la correcta. Con "Empty certificate data", la CA tiene finales de línea CRLF (sección 3, punto d). En la **primera** instalación, borrar `sudo rm /etc/vulnmgmt/indexer.secret` antes de reintentar. |
 | `Abort if the engine cannot read the vulnerability index` con 401 | El usuario de lectura no existe (por ejemplo, la primera instalación falló a mitad): `sudo rm /etc/vulnmgmt/indexer.secret` y volver a ejecutar; `bootstrap.sh` pide de nuevo la contraseña de `admin`. |
 | El agente `srv-vulnmgmt` no aparece en Wazuh | Puertos 1514/1515 en el grupo de seguridad; versión del agente más nueva que el manager (fijarla con `hardening_wazuh_agent_version`); `sudo tail /var/ossec/logs/ossec.log` en srv-vulnmgmt. |
