@@ -1,0 +1,42 @@
+# {{ vulnmgmt_managed_comment }}
+# n8n Community Edition (free, self-hosted) for the no-code workflows, run
+# with Docker.
+# Listens only on 127.0.0.1:5678: open it through an SSH tunnel
+#   ssh -L 5678:127.0.0.1:5678 <admin>@<this-server>
+{% set _label = ':Z' if (ansible_facts['selinux']['status'] | default('disabled')) == 'enabled' else '' %}
+[Unit]
+Description=n8n - no-code workflows for vulnerability management
+Requires=docker.service
+After=docker.service network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# A container left behind by a crash would block the name.
+ExecStartPre=-/usr/bin/docker rm -f n8n
+# Pull only when the pinned image is missing (no Internet needed afterwards).
+ExecStartPre=/bin/sh -c '/usr/bin/docker image inspect {{ vulnmgmt_n8n_image }} >/dev/null 2>&1 || /usr/bin/docker pull {{ vulnmgmt_n8n_image }}'
+ExecStart=/usr/bin/docker run --rm --name n8n \
+  --network host \
+  --memory {{ vulnmgmt_n8n_memory_max }} \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  -v /var/lib/n8n:/home/node/.n8n{{ _label }} \
+  -v /etc/vulnmgmt/n8n-ca:/certs:ro{{ ',Z' if _label else '' }} \
+  -e N8N_LISTEN_ADDRESS=127.0.0.1 \
+  -e N8N_HOST=localhost \
+  -e N8N_PORT=5678 \
+  -e N8N_DIAGNOSTICS_ENABLED=false \
+  -e N8N_VERSION_NOTIFICATIONS_ENABLED=false \
+  -e N8N_TEMPLATES_ENABLED=false \
+  -e GENERIC_TIMEZONE={{ vulnmgmt_n8n_timezone }} \
+  -e TZ={{ vulnmgmt_n8n_timezone }} \
+  -e NODE_EXTRA_CA_CERTS=/certs/vulnmgmt.crt \
+  {{ vulnmgmt_n8n_image }}
+ExecStop=/usr/bin/docker stop -t 30 n8n
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

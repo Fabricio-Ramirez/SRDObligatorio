@@ -16,7 +16,7 @@ infraestructura**, sin APIs pagas ni envío de datos a terceros.
 
 > **Cambio de arquitectura:** antes la plataforma se instalaba en el propio servidor Wazuh. Ese modo sigue
 > disponible (sin `--wazuh-host`, sección 4, opción B), pero el recomendado es el servidor dedicado: no
-> carga al servidor Wazuh, no depende de los paquetes de Amazon Linux (Podman/n8n) y queda endurecido.
+> carga al servidor Wazuh y queda endurecido.
 
 ## Índice
 
@@ -90,7 +90,7 @@ Componentes y consumo aproximado:
 |---|---|---|
 | Motor `vulnmgmt` | Servicio *oneshot* disparado por el temporizador; sólo librería estándar de Python 3.9+ | Máx. 50 % de 1 CPU y 512 MB (`CPUQuota`/`MemoryMax`), prioridad baja |
 | nginx | Sirve archivos estáticos | Mínimo |
-| n8n | Contenedor Podman (Quadlet) en 127.0.0.1; ejecuta el script de priorización una vez por semana | Máx. 1 GB |
+| n8n | Contenedor **Docker** (unidad systemd `n8n.service`) en 127.0.0.1; ejecuta el script de priorización una vez por semana | Máx. 1 GB (`--memory`) |
 
 ## 3. Requisitos previos
 
@@ -339,12 +339,12 @@ ansible-playbook -i inventory/hosts.ini vulnmgmt.yml -l srv-vulnmgmt -e @secrets
 | Paso | Archivo |
 |---|---|
 | Valida el sistema operativo (Rocky 9/10 o Amazon Linux 2023), Python 3.9 o superior y las credenciales. En modo remoto: que exista la CA y que el indexer responda en 9200. En modo local: que sea el manager de Wazuh | `tasks/preflight.yml` |
-| Paquetes (python3, nginx, podman…), usuario de servicio `vulnmgmt`, motor y panel, certificado TLS, secretos generados | `tasks/base.yml` |
+| Paquetes (python3, nginx, openssl…), usuario de servicio `vulnmgmt`, motor y panel, certificado TLS, secretos generados | `tasks/base.yml` |
 | Nombre del certificado en `/etc/hosts` (si se pasó `--indexer-name`), rol y usuario de **sólo lectura** en el indexer (sólo el índice de vulnerabilidades) y prueba de acceso | `tasks/indexer.yml` |
 | Configuración del motor (`/etc/vulnmgmt/config.json`, 0640) y logrotate | `tasks/config.yml` |
 | nginx (HTTPS, usuario y contraseña, cabeceras de seguridad) y firewalld | `tasks/web.yml` |
 | Modo remoto: el agente Wazuh lee `events.json` (bloque `localfile` en su `ossec.conf`). Modo local: reglas en el manager y lectura de los eventos (`wazuh-analysisd -t` antes de reiniciar) | `tasks/wazuh.yml` |
-| n8n con Podman Quadlet; arma el flujo con el script de priorización y lo importa cuando cambió | `tasks/n8n.yml` |
+| Docker (paquete `docker` de Amazon Linux 2023, o `docker-ce` del repositorio oficial en Rocky), n8n como unidad systemd que lanza el contenedor; arma el flujo con el script de priorización y lo importa cuando cambió | `tasks/n8n.yml`, `templates/n8n.service.j2` |
 | Servicio y temporizador, primer informe y resumen de acceso | `tasks/schedule.yml` |
 
 Es idempotente: se puede volver a ejecutar para actualizar el motor, el panel o la configuración.
@@ -578,7 +578,7 @@ modelo de lenguaje en el camino. El trabajo está repartido así:
 Acá es donde la plataforma **prioriza las vulnerabilidades y propone las soluciones**: n8n lee el informe
 del motor y un script determinístico arma el plan de trabajo para el equipo de infraestructura.
 
-n8n Community Edition corre en un contenedor Podman, **sólo en 127.0.0.1:5678** y sin telemetría. Para usarlo:
+n8n Community Edition corre en un contenedor **Docker**, **sólo en 127.0.0.1:5678** y sin telemetría. Para usarlo:
 
 ```bash
 ssh -L 5678:127.0.0.1:5678 <admin>@<servidor-wazuh>
@@ -662,7 +662,7 @@ script cambia, el archivo renderizado cambia y el rol **vuelve a importar** el f
 
 ## 9. Flujo no-code (n8n)
 
-n8n Community Edition corre en un contenedor Podman, **sólo en 127.0.0.1:5678** y sin telemetría. Para usarlo:
+n8n Community Edition corre en un contenedor **Docker**, **sólo en 127.0.0.1:5678** y sin telemetría. Para usarlo:
 
 ```bash
 ssh -L 5678:127.0.0.1:5678 <admin>@<servidor-wazuh>
@@ -790,7 +790,7 @@ Todas están en `roles/vulnmgmt/defaults/main.yml`.
 | `vulnmgmt_allowed_networks` | `[]` (cualquiera) | Redes que pueden abrir el panel, p. ej. `["10.0.99.0/24"]`. |
 | `vulnmgmt_schedule` | `*-*-* 03:30:00` | Frecuencia del informe (formato `OnCalendar` de systemd). |
 | `vulnmgmt_wazuh_event_priorities` | `[P1, P2]` | Prioridades que generan alertas en Wazuh. |
-| `vulnmgmt_n8n_enabled` | `true` | `false` para no instalar n8n (n8n necesita Podman 4.4 o superior). **Sin n8n no hay plan priorizado ni aviso semanal.** |
+| `vulnmgmt_n8n_enabled` | `true` | `false` para no instalar n8n ni Docker. **Sin n8n no hay plan priorizado ni aviso semanal.** |
 | `vulnmgmt_n8n_mail_from` / `_mail_to` | `vulnmgmt@cdg.uy` / `infraestructura@cdg.uy` | Remitente y destinatario del aviso (el nodo de correo igual viene deshabilitado). |
 | `vulnmgmt_panel_url` | `https://<fqdn>:8443/` | Enlace al panel que se incluye en el aviso. |
 | `vulnmgmt_allow_untested_platform` | `false` | `true` para probar otra distribución con `dnf` (sin soporte); nunca saltea la verificación de Python. |
@@ -844,8 +844,8 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
 | Aparecieron dos flujos iguales en n8n | Se duplicó a mano en el editor: el importado por el rol es el que tiene el `id` `vulnmgmtWeekly01`; borrar el otro. |
 | Faltan KEV/EPSS (aviso en el panel) | Sin salida a Internet: se usa la última caché; los avisos lo indican. |
 | `The vulnerability platform targets Rocky Linux 9/10 or Amazon Linux 2023` | El sistema no está soportado (por ejemplo Amazon Linux 2 o Rocky 8). Ver `grep PRETTY_NAME /etc/os-release`. |
-| `No package nginx available` (o `podman`, `logrotate`) en Amazon Linux | Dos causas posibles: el paquete **no existe** en esa distribución, o el servidor **no llega a sus repositorios**. Distinguirlo con `dnf repolist` y `dnf list --available nginx podman logrotate`. Si falta sólo `podman`, instalar sin n8n (ver la fila siguiente). |
-| `n8n needs Podman 4.4 or newer`, o `podman` no disponible | Actualizar Podman, o instalar sin n8n: `sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_n8n_enabled=false`. **Sin n8n se pierden el plan priorizado y el aviso semanal** (sección 9); el panel, las alertas y la remediación funcionan igual. |
+| `No package nginx available` (o `docker`, `logrotate`) en Amazon Linux | El servidor **no llega a los repositorios** de Amazon Linux (los tres paquetes están en los repositorios por defecto de Amazon Linux 2023). Comprobarlo con `dnf repolist` y `dnf list --available nginx docker logrotate`. |
+| n8n no arranca (`systemctl status n8n`, `journalctl -u n8n`) | La primera vez descarga la imagen de `docker.io`: sin salida a Internet falla el `docker pull`. Ver `docker images` y `systemctl status docker`. Para instalar el resto sin n8n: `sudo ./bootstrap.sh --component vulnmgmt -- -e vulnmgmt_n8n_enabled=false` (**sin n8n se pierden el plan priorizado y el aviso semanal**, sección 9; el panel, las alertas y la remediación funcionan igual). |
 | `firewalld is not running ... NOT opened` | No hay `firewalld`: abrir el puerto 8443/tcp con el firewall que se use. |
 | `skipping: no hosts matched` al ejecutar el playbook | El nombre del agente de Wazuh no existe en el inventario: usarlo como alias en `inventory/hosts.ini` (sección 6). |
 | El panel no abre desde la red | `firewall-cmd --list-all` y `vulnmgmt_allowed_networks`; `systemctl status nginx`. |
@@ -906,6 +906,12 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
 
 **Limitaciones (validar en la maqueta antes de la defensa):**
 
+- **n8n con Docker: no se ejecutó con un Docker real** (no hay Docker en el entorno de pruebas). Se verificó que la
+  unidad `n8n.service` se genera bien para Amazon Linux (sin etiquetas SELinux) y para Rocky (con `:Z`), que
+  `systemd-analyze verify` no marca errores y que el paquete elegido es `docker` en Amazon y `docker-ce` en Rocky.
+  Falta confirmar en el servidor Wazuh: `dnf install docker`, la descarga de la imagen de n8n, que n8n responda en
+  `127.0.0.1:5678` y la importación del flujo con `docker exec`.
+
 - **Servidor dedicado (modo remoto): no se ejecutó sobre VMs reales.** Lo probado, en Rocky Linux 10.2 (WSL) con
   ansible-core 2.16: `--syntax-check` de `vulnmgmt.yml` y `site-rocky10.yml` con el perfil, las URL derivadas en los tres
   casos (local, remoto y remoto con `--indexer-name`), el *preflight* real en cuatro situaciones (servidor que no es
@@ -917,7 +923,7 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
   lectura, el enrolamiento del agente en Rocky 10 y que las alertas lleguen al manager por el agente.
 
 - No se ejecutó el rol completo sobre una VM (Rocky 9/10 o Amazon Linux 2023) con Wazuh real (systemd, SELinux *enforcing*,
-  firewalld y Podman reales).
+  firewalld y Docker reales).
 - **Amazon Linux 2023:** se probó `bootstrap.sh --component vulnmgmt` completo dentro de la imagen oficial de Amazon Linux 2023
   (`ID=amzn`, Python 3.9.25): detecta el sistema, instala `ansible-core` 2.15.13 en el entorno virtual, y el rol pasa los
   chequeos de sistema operativo, de Python, de servidor Wazuh y de credenciales con los hechos reales de Ansible
@@ -925,7 +931,7 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
   Ubuntu se rechazan con un mensaje claro), que el endurecimiento sigue rechazando a Amazon Linux y que Rocky 9 y 10
   eligen los mismos playbooks que antes.
 - **Sin validar en Amazon Linux 2023** (el entorno de pruebas no llega a `cdn.amazonlinux.com`): que sus repositorios
-  tengan `nginx`, `openssl`, `tar`, `zstd`, `logrotate` y `podman` (y que `podman` sea 4.4 o superior), el usuario y las
+  tengan `nginx`, `openssl`, `tar`, `logrotate` y `docker`, el usuario y las
   rutas de `nginx`, `systemd`, SELinux y el firewall reales, y las rutas de Wazuh de esa imagen
   (`/var/ossec`, `/etc/wazuh-indexer/certs/root-ca.pem`). Si falta algún paquete, el error aparece en la tarea
   *Install the required packages*.
@@ -934,7 +940,7 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
   Validar `--check` y luego la aplicación en un servidor de prueba antes de usarlo en producción.
 - El texto que imprime `dnf needs-restarting` se verificó contra el código fuente de `dnf-plugins-core`, no contra un
   servidor con reinicio pendiente real.
-- **El flujo nuevo no se importó dentro de n8n**: en este entorno no había Podman ni la imagen de n8n. El
+- **El flujo nuevo no se importó dentro de n8n**: en este entorno no había Docker ni la imagen de n8n. El
   script se ejecutó con Node 24 reproduciendo cómo lo invoca el nodo *Code*, y la plantilla se verificó
   renderizada, pero falta confirmar en la maqueta: que `n8n import:workflow` acepte el flujo, que
   **actualice** el existente en lugar de duplicarlo (el `id` es fijo) y que el nodo *Code* de la versión

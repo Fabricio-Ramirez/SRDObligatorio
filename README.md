@@ -235,7 +235,7 @@ Punto 5 — Gestión de vulnerabilidades (ver sección 12 y docs/vulnmgmt.md)
 ├── vulnmgmt.yml                 # Playbook (grupos vulnmgmt_server y wazuh_server)
 ├── profiles/vulnmgmt-server.yml # Excepciones del endurecimiento para el servidor dedicado
 ├── roles/vulnmgmt/              # Rol de instalación
-│   ├── tasks/n8n.yml            #   n8n (Podman) e importación del flujo
+│   ├── tasks/n8n.yml            #   Docker, n8n (unidad systemd) e importación del flujo
 │   └── templates/vulnmgmt-workflow.json.j2  # Flujo de n8n (incrusta el script de abajo)
 ├── vulnmgmt/engine/vulnmgmt/    # Motor Python (KEV/EPSS, prioridad P1-P4, SLA, remediación)
 ├── vulnmgmt/web/                # Panel web (HTML + JS + CSS, sin dependencias)

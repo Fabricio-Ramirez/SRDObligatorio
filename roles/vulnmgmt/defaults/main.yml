@@ -114,11 +114,20 @@ vulnmgmt_engine_memory_max: 512M
 vulnmgmt_wazuh_rules: true
 vulnmgmt_wazuh_event_priorities: [P1, P2]
 
-# --- No-code workflows (n8n Community Edition, Podman) -------------------------
+# --- No-code workflows (n8n Community Edition, in a container) -----------------
 # The flow prioritises the actions and proposes a solution for each one with the
 # script in vulnmgmt/n8n/priorizar-soluciones.js (node "Code"), and sends the
 # plan to the infrastructure team.
 vulnmgmt_n8n_enabled: true
+# n8n runs with Docker (systemd unit n8n.service wrapping "docker run").
+# Amazon Linux 2023 (the Wazuh server image) ships it as "docker" in its
+# default repositories; on Rocky Linux it comes from Docker's official
+# repository (docker-ce), configured by the role.
+vulnmgmt_docker_packages: >-
+  {{ ['docker'] if ansible_facts['distribution'] == 'Amazon'
+     else ['docker-ce', 'docker-ce-cli', 'containerd.io'] }}
+vulnmgmt_docker_repo_baseurl: "https://download.docker.com/linux/rhel/$releasever/$basearch/stable"
+vulnmgmt_docker_repo_gpgkey: https://download.docker.com/linux/rhel/gpg
 vulnmgmt_n8n_image: docker.io/n8nio/n8n:2.46.4
 vulnmgmt_n8n_timezone: America/Montevideo
 vulnmgmt_n8n_memory_max: 1G

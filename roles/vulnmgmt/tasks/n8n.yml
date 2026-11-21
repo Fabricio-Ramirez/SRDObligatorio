@@ -1,18 +1,68 @@
 ---
-# Quadlet (the .container units below) needs Podman 4.4 or newer.
-- name: n8n | Read the Podman version
-  ansible.builtin.command: podman --version
-  register: vulnmgmt_podman_version
-  changed_when: false
-  check_mode: false
+# n8n runs in Docker. Amazon Linux 2023 (the Wazuh server image) has docker in
+# its default repositories; on Rocky Linux it comes from Docker's repository.
+- name: n8n | Add the Docker repository (Rocky Linux)
+  ansible.builtin.yum_repository:
+    name: docker-ce-stable
+    description: Docker CE Stable - $basearch
+    baseurl: "{{ vulnmgmt_docker_repo_baseurl }}"
+    gpgcheck: true
+    gpgkey: "{{ vulnmgmt_docker_repo_gpgkey }}"
+    enabled: true
+  when: ansible_facts['distribution'] != 'Amazon'
 
-- name: n8n | Require a Podman with Quadlet support
-  ansible.builtin.assert:
-    that: (vulnmgmt_podman_version.stdout | regex_search('[0-9]+(\.[0-9]+)+')) is version('4.4', '>=')
-    fail_msg: >-
-      n8n needs Podman 4.4 or newer (Quadlet); found "{{ vulnmgmt_podman_version.stdout }}".
-      Install the rest without it with -e vulnmgmt_n8n_enabled=false.
-    quiet: true
+- name: n8n | Install Docker
+  ansible.builtin.dnf:
+    name: "{{ vulnmgmt_docker_packages }}"
+    state: present
+
+# Docker turns on net.ipv4.ip_forward when it starts, against the CIS hardening
+# of the Rocky server (3.3.1.1). n8n uses the host network, so forwarding is not
+# needed. Written only when the file does not exist (an existing one is kept).
+- name: n8n | Ensure the Docker configuration directory exists (Rocky Linux)
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: ansible_facts['distribution'] != 'Amazon'
+
+- name: n8n | Keep IP forwarding off in Docker (Rocky Linux)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: |
+      {"ip-forward": false}
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+  when: ansible_facts['distribution'] != 'Amazon'
+
+- name: n8n | Ensure Docker is enabled and running
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+# Earlier versions ran n8n with a Podman Quadlet unit: stop it (it holds port
+# 5678) and remove it. The data in /var/lib/n8n is kept and reused.
+- name: n8n | Look for an earlier Podman unit
+  ansible.builtin.stat:
+    path: /etc/containers/systemd/n8n.container
+  register: vulnmgmt_n8n_quadlet
+
+- name: n8n | Stop the earlier Podman unit
+  ansible.builtin.systemd:
+    name: n8n
+    state: stopped
+  when: vulnmgmt_n8n_quadlet.stat.exists
+  failed_when: false
+
+- name: n8n | Remove the earlier Podman unit
+  ansible.builtin.file:
+    path: /etc/containers/systemd/n8n.container
+    state: absent
 
 # n8n runs as uid 1000 ("node") inside the container.
 - name: n8n | Create the data, import and certificate directories
@@ -53,20 +103,20 @@
     mode: "0600"
   register: vulnmgmt_n8n_workflow
 
-- name: n8n | Install the container (Podman Quadlet)
+- name: n8n | Install the n8n service (Docker)
   ansible.builtin.template:
-    src: n8n.container.j2
-    dest: /etc/containers/systemd/n8n.container
+    src: n8n.service.j2
+    dest: /etc/systemd/system/n8n.service
     owner: root
     group: root
     mode: "0644"
   notify: Restart n8n
 
-# Quadlet generates n8n.service at daemon-reload; it is started from its
-# [Install] section and cannot be "enabled" with systemctl.
-- name: n8n | Ensure n8n is running
+# The first start pulls the image (TimeoutStartSec=300 in the unit).
+- name: n8n | Ensure n8n is enabled and running
   ansible.builtin.systemd:
     name: n8n
+    enabled: true
     state: started
     daemon_reload: true
 
@@ -86,7 +136,7 @@
 # runs once per version *and* is retried on the next run if it failed: the
 # marker is only written after the import succeeds.
 - name: n8n | Import the vulnerability workflow (once per version, retried on failure)
-  ansible.builtin.command: podman exec n8n n8n import:workflow --input=/home/node/.n8n/import/vulnmgmt-workflow.json
+  ansible.builtin.command: docker exec n8n n8n import:workflow --input=/home/node/.n8n/import/vulnmgmt-workflow.json
   args:
     creates: "/var/lib/n8n/import/.imported-{{ vulnmgmt_n8n_workflow.checksum | default('unknown') }}"
 
