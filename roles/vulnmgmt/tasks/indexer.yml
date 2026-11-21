@@ -33,6 +33,32 @@
     path: /etc/vulnmgmt/indexer-ca.pem
   register: vulnmgmt_indexer_ca
 
+# Without credentials (nothing to hide): checks TLS and the route before the
+# credentialed calls below, whose errors are hidden by no_log. 401 is the
+# expected answer of a reachable indexer.
+- name: Indexer | Check the TLS connection to the indexer
+  ansible.builtin.uri:
+    url: "{{ vulnmgmt_indexer_url }}"
+    validate_certs: "{{ vulnmgmt_indexer_verify_tls | bool }}"
+    ca_path: "{{ '/etc/vulnmgmt/indexer-ca.pem' if vulnmgmt_indexer_ca.stat.exists else omit }}"
+    status_code: [200, 401]
+    timeout: 15
+  register: vulnmgmt_indexer_probe
+  failed_when: false
+  check_mode: false   # read-only GET: also useful in --check
+
+- name: Indexer | Abort if the TLS connection to the indexer fails
+  ansible.builtin.fail:
+    msg: >-
+      {{ vulnmgmt_indexer_url }}: {{ vulnmgmt_indexer_probe.msg | default('') | truncate(300) }}.
+      {{ ('If the error says "mismatch" or "not valid for", the indexer certificate does not name '
+          ~ vulnmgmt_indexer_address ~ ': pass one of the DNS names of its subjectAltName with --indexer-name '
+          ~ '(vulnmgmt_indexer_tls_name). If it says the issuer is unknown, the copied CA is not the indexer root-ca.pem.')
+         if vulnmgmt_remote | bool else '' }}
+  when:
+    - vulnmgmt_indexer_probe is not skipped
+    - vulnmgmt_indexer_probe.status | default(-1) not in [200, 401]
+
 # --- Least privilege: dedicated read-only user (OpenSearch security API) ------
 - name: Indexer | Create the read-only role, user and role mapping
   ansible.builtin.uri:
@@ -90,8 +116,10 @@
   register: vulnmgmt_index_count
   retries: 5
   delay: 5
-  until: vulnmgmt_index_count.status == 200
-  failed_when: false
+  until: vulnmgmt_index_count.status | default(0) == 200
+  check_mode: false   # read-only GET
+  # Retries that never reach "until" fail the task even with failed_when: false.
+  ignore_errors: true
   no_log: true
 
 # The task above hides its output (credentials); explain the usual causes here.
@@ -100,13 +128,17 @@
     msg: >-
       {{ vulnmgmt_indexer_url }} answered "{{ vulnmgmt_index_count.msg | default('') | truncate(200) }}"
       (HTTP {{ vulnmgmt_index_count.status | default('-') }}).
-      {{ 'Certificate errors ("hostname mismatch"): the indexer certificate does not name '
+      {{ 'Certificate errors ("mismatch", "not valid for"): the indexer certificate does not name '
          ~ vulnmgmt_indexer_address ~ '; set vulnmgmt_indexer_tls_name (bootstrap.sh --indexer-name) to a name '
          ~ 'from its subjectAltName. ' if vulnmgmt_remote | bool else '' }}401/403: wrong credentials or the
       read-only user was not created. 404: the index {{ vulnmgmt_indexer_index }} does not exist yet
       (enable the Wazuh vulnerability detection).
-  when: vulnmgmt_index_count.status | default(0) != 200
+  # In --check the read-only user is not created yet on a first install.
+  when:
+    - not ansible_check_mode
+    - vulnmgmt_index_count.status | default(0) != 200
 
 - name: Indexer | Report the number of vulnerability documents
   ansible.builtin.debug:
     msg: "Vulnerability documents in the indexer: {{ vulnmgmt_index_count.json['count'] }}"
+  when: vulnmgmt_index_count.json is defined

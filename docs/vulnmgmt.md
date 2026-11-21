@@ -110,8 +110,8 @@ que el servidor Wazuh. En el servidor Wazuh hay que preparar cuatro cosas (sólo
 |---|---|---|
 | a | **Grupo de seguridad de AWS**: permitir desde la IP de srv-vulnmgmt **9200/tcp**, **1514/tcp**, **1515/tcp** y, si se usa la API, **55000/tcp**. Desde ninguna otra IP. | Consola de EC2 → *Security groups* → *Inbound rules*. Si además corre `firewalld` en el servidor: `sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="<IP-srv-vulnmgmt>" port port="9200" protocol="tcp" accept'` (y lo mismo para 55000) y `sudo firewall-cmd --reload`. |
 | b | **Que el indexer escuche en la red**, no sólo en `127.0.0.1`. | `sudo ss -ltnp \| grep 9200`. Si muestra `127.0.0.1:9200`, poner `network.host: "0.0.0.0"` en `/etc/wazuh-indexer/opensearch.yml` y `sudo systemctl restart wazuh-indexer`. |
-| c | **Ver qué nombres tiene el certificado del indexer** (para que TLS se verifique sin errores). | `sudo ls /etc/wazuh-indexer/certs/` y, con el certificado del nodo (el `.pem` que no es `admin`, `root-ca` ni `*-key`): `sudo openssl x509 -in /etc/wazuh-indexer/certs/<nodo>.pem -noout -ext subjectAltName`. Si **no** aparece la IP del servidor Wazuh, anotar uno de los nombres `DNS:` que sí aparezcan: se pasa con `--indexer-name` (el rol lo agrega a `/etc/hosts` de srv-vulnmgmt). |
-| d | **Copiar la CA del indexer** a srv-vulnmgmt. | Desde srv-vulnmgmt: `sudo scp <admin>@<IP-wazuh>:/etc/wazuh-indexer/certs/root-ca.pem /root/wazuh-root-ca.pem` (o copiar el contenido a mano). Es un certificado público, no una clave. |
+| c | **Ver qué nombres tiene el certificado del indexer** (para que TLS se verifique sin errores). | `sudo ls /etc/wazuh-indexer/certs/` y, con el certificado del nodo (el `.pem` que no es `admin`, `root-ca` ni `*-key`): `sudo openssl x509 -in /etc/wazuh-indexer/certs/<nodo>.pem -noout -ext subjectAltName`. Si **no** aparece la IP del servidor Wazuh, anotar uno de los nombres `DNS:` que sí aparezcan: se pasa con `--indexer-name` (el rol lo agrega a `/etc/hosts` de srv-vulnmgmt). Si el certificado no tiene **ningún** nombre `DNS:` (sólo `IP:127.0.0.1`), hay que regenerar el certificado del nodo incluyendo la IP del servidor, con la herramienta de certificados de Wazuh (`wazuh-certs-tool.sh`). **No** se desactiva la verificación TLS. |
+| d | **Copiar la CA del indexer** a srv-vulnmgmt. | Desde srv-vulnmgmt: `sudo scp <admin>@<IP-wazuh>:/etc/wazuh-indexer/certs/root-ca.pem /root/wazuh-root-ca.pem` (o copiar el contenido a mano). Es un certificado público, no una clave. Si se copió desde Windows, quitarle los finales de línea CRLF (`sudo sed -i 's/$//' /root/wazuh-root-ca.pem`): con CRLF, Ansible no lo lee ("Empty certificate data"). |
 
 Además: la contraseña de `admin` del indexer (punto 3 de la lista siguiente), la versión del manager para fijar la del
 agente (`sudo /var/ossec/bin/wazuh-control info` → `WAZUH_VERSION`) y, después de instalar, las **reglas** en el manager
@@ -206,7 +206,9 @@ git clone https://github.com/Fabricio-Ramirez/SRDObligatorio.git && cd SRDObliga
 sudo ./bootstrap.sh --component hardening --profile vulnmgmt-server --siem-host 10.0.10.12 -- -e hardening_wazuh_agent_version=<versión-del-manager>-1
 ```
 
-Reiniciar si el resumen dice `REBOOT REQUIRED`, y verificar con `sudo ./scripts/verify.sh`. En el dashboard de Wazuh
+Reiniciar si el resumen dice `REBOOT REQUIRED`, y verificar con `sudo ./scripts/verify.sh`. **Cada vez que se vuelva a
+endurecer este servidor hay que pasar `--profile vulnmgmt-server`**: sin el perfil, la plantilla desinstala nginx (el
+panel deja de funcionar) y vuelve a bloquear el túnel SSH hacia n8n. En el dashboard de Wazuh
 el agente `srv-vulnmgmt` tiene que aparecer como activo.
 
 **3. Instalar la plataforma** leyendo el Wazuh remoto:
@@ -806,8 +808,9 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
 |---|---|
 | *Preflight*: "Local mode installs the platform on the Wazuh server" | Se ejecutó en srv-vulnmgmt sin `--wazuh-host`: agregar `--wazuh-host <IP-wazuh>`. |
 | *Preflight*: "... was not found. Copy the indexer root CA" | Falta la CA en srv-vulnmgmt: sección 3, punto d, o indicar la ruta con `--wazuh-ca`. |
-| *Preflight*: "<IP>:9200 does not answer" | Grupo de seguridad de AWS o `firewalld` del servidor Wazuh sin la regla para srv-vulnmgmt, o el indexer escucha sólo en `127.0.0.1` (sección 3, puntos a y b). Probar desde srv-vulnmgmt: `curl -k https://<IP-wazuh>:9200` (debe responder 401). |
-| `Abort if the engine cannot read the vulnerability index` con "hostname mismatch" o `CERTIFICATE_VERIFY_FAILED` | El certificado del indexer no nombra la IP: pasar `--indexer-name <nombre-DNS-del-certificado>` (sección 3, punto c). Si dice que no confía en el emisor, la CA copiada no es la correcta. |
+| *Preflight*: "<IP>:9200 does not answer" | Grupo de seguridad de AWS o `firewalld` del servidor Wazuh sin la regla para srv-vulnmgmt, o el indexer escucha sólo en `127.0.0.1` (sección 3, puntos a y b). Probar desde srv-vulnmgmt: `curl -k https://<IP-wazuh>:9200` (debe responder 401). Si el fallo fue en la **primera** instalación, borrar `sudo rm /etc/vulnmgmt/indexer.secret` antes de reintentar, para que `bootstrap.sh` vuelva a pedir la contraseña de `admin` y cree el usuario de lectura. |
+| `Abort if the TLS connection to the indexer fails` con "IP address mismatch", "hostname mismatch" o `CERTIFICATE_VERIFY_FAILED` | El certificado del indexer no nombra la IP: pasar `--indexer-name <nombre-DNS-del-certificado>` (sección 3, punto c). Si dice que no confía en el emisor, la CA copiada no es la correcta. Con "Empty certificate data", la CA tiene finales de línea CRLF (sección 3, punto d). En la **primera** instalación, borrar `sudo rm /etc/vulnmgmt/indexer.secret` antes de reintentar. |
+| `Abort if the engine cannot read the vulnerability index` con 401 | El usuario de lectura no existe (por ejemplo, la primera instalación falló a mitad): `sudo rm /etc/vulnmgmt/indexer.secret` y volver a ejecutar; `bootstrap.sh` pide de nuevo la contraseña de `admin`. |
 | El agente `srv-vulnmgmt` no aparece en Wazuh | Puertos 1514/1515 en el grupo de seguridad; versión del agente más nueva que el manager (fijarla con `hardening_wazuh_agent_version`); `sudo tail /var/ossec/logs/ossec.log` en srv-vulnmgmt. |
 | No aparecen las alertas `rule.groups: vulnmgmt` | Faltan las reglas en el manager (sección 4, paso 4) o el agente no está activo. |
 | *Preflight*: "Remote mode must not run on the Wazuh server itself" | Se pasó `--wazuh-host` en el propio servidor Wazuh: ahí usar el modo local (sin `--wazuh-host`). |
@@ -825,6 +828,7 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
 | `firewalld is not running ... NOT opened` | No hay `firewalld`: abrir el puerto 8443/tcp con el firewall que se use. |
 | `skipping: no hosts matched` al ejecutar el playbook | El nombre del agente de Wazuh no existe en el inventario: usarlo como alias en `inventory/hosts.ini` (sección 6). |
 | El panel no abre desde la red | `firewall-cmd --list-all` y `vulnmgmt_allowed_networks`; `systemctl status nginx`. |
+| nginx desapareció de srv-vulnmgmt, o `ssh -L 5678:...` dejó de funcionar | Se volvió a endurecer sin `--profile vulnmgmt-server`. Repetir el endurecimiento con el perfil y después `sudo ./bootstrap.sh --component vulnmgmt --wazuh-host ...` (reinstala nginx y su configuración). |
 | nginx desapareció tras endurecer el servidor Wazuh | Falta `host_vars` con `hardening_packages_keep: [nginx]` (sección 3); volver a ejecutar el rol `vulnmgmt`. |
 
 ## 15. Pruebas realizadas y limitaciones
@@ -885,7 +889,9 @@ El JSON del flujo de n8n no está en el repositorio: lo arma el rol con
   ansible-core 2.16: `--syntax-check` de `vulnmgmt.yml` y `site-rocky10.yml` con el perfil, las URL derivadas en los tres
   casos (local, remoto y remoto con `--indexer-name`), el *preflight* real en cuatro situaciones (servidor que no es
   Wazuh sin `--wazuh-host`, CA faltante, puerto 9200 cerrado y puerto abierto), el texto de los mensajes de error, y las
-  opciones nuevas de `bootstrap.sh` con `dnf`/`ansible` simulados. Falta comprobar en la maqueta: la conexión al indexer
+  opciones nuevas de `bootstrap.sh` con `dnf`/`ansible` simulados. **TLS real** contra un servidor HTTPS con un certificado
+  firmado por una CA propia cuyo SAN es sólo `DNS:localhost`: por IP, la sonda corta con la pista de `--indexer-name`; con
+  el nombre, conecta y verifica (Ansible `uri` y el cliente HTTP del motor), y en `--check` no se interrumpe. Falta comprobar en la maqueta: la conexión al indexer
   de la imagen de Amazon Linux (puerto, `network.host` y nombres del certificado), la creación remota del usuario de
   lectura, el enrolamiento del agente en Rocky 10 y que las alertas lleguen al manager por el agente.
 
