@@ -698,7 +698,7 @@ Todas están en `roles/vulnmgmt/defaults/main.yml`.
 | `vulnmgmt_scoring` | ver sección 7 | Pesos, umbrales, SLA y criticidad por servidor o grupo. |
 | `vulnmgmt_web_port` / `vulnmgmt_web_user` | `8443` / `infra` | Panel. |
 | `vulnmgmt_web_password` | `""` (generada) | Contraseña del panel; si queda vacía se genera y se guarda en `/etc/vulnmgmt/web.secret`. |
-| `vulnmgmt_allowed_networks` | `[]` (cualquiera) | Redes que pueden abrir el panel, p. ej. `["10.0.99.0/24"]`. |
+| `vulnmgmt_allowed_networks` | `[]` (cualquiera) | Redes que pueden abrir el panel, p. ej. `["10.10.99.0/24"]`. |
 | `vulnmgmt_schedule` | `*-*-* 03:30:00` | Frecuencia del informe (formato `OnCalendar` de systemd). |
 | `vulnmgmt_wazuh_event_priorities` | `[P1, P2]` | Prioridades que generan alertas en Wazuh. |
 | `vulnmgmt_n8n_enabled` | `true` | `false` para no instalar n8n ni Docker. **Sin n8n no hay plan priorizado ni aviso semanal.** |

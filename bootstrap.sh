@@ -19,14 +19,14 @@
 #    site-rocky10.yml (Rocky 10, CIS RHEL 10 v1.0.1) or vulnmgmt.yml.
 #
 # Usage (as root, on the freshly installed server):
-#   ./bootstrap.sh --siem-host 10.0.10.12            # inside a clone
+#   ./bootstrap.sh --siem-host 10.10.30.10            # inside a clone
 #   curl -fsSL https://raw.githubusercontent.com/Fabricio-Ramirez/SRDObligatorio/HEAD/bootstrap.sh \
-#     | sudo bash -s -- --siem-host 10.0.10.12        # without a clone
+#     | sudo bash -s -- --siem-host 10.10.30.10        # without a clone
 #
-# Unused alternative - platform on another server (Rocky Linux 10), Wazuh at 10.0.10.12:
-#   ./bootstrap.sh --component hardening --profile vulnmgmt-server --siem-host 10.0.10.12
+# Unused alternative - platform on another server (Rocky Linux 10), Wazuh at 10.10.30.10:
+#   ./bootstrap.sh --component hardening --profile vulnmgmt-server --siem-host 10.10.30.10
 #   (reboot)
-#   ./bootstrap.sh --component vulnmgmt --wazuh-host 10.0.10.12 --wazuh-ca /root/wazuh-root-ca.pem
+#   ./bootstrap.sh --component vulnmgmt --wazuh-host 10.10.30.10 --wazuh-ca /root/wazuh-root-ca.pem
 #
 # Run "./bootstrap.sh --help" for every option.
 # =============================================================================

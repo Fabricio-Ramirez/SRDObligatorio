@@ -1,0 +1,27 @@
+<!--
+  Fragmento del ossec.conf del manager (srv-wazuh, /var/ossec/etc/ossec.conf),
+  dentro de <ossec_config>. Obligatorio SRD 2026.
+-->
+
+<!-- Respuesta activa 1: deshabilitar la cuenta en FreeIPA (agente 002 = srv-ipa) -->
+<command>
+  <name>ipa-disable-user</name>
+  <executable>ipa-disable-user.sh</executable>
+  <timeout_allowed>yes</timeout_allowed>
+</command>
+
+<active-response>
+  <command>ipa-disable-user</command>
+  <location>defined-agent</location>
+  <agent_id>002</agent_id>
+  <rules_id>100117</rules_id>
+  <timeout>300</timeout>
+</active-response>
+
+<!-- Respuesta activa 2: bloquear la IP de origen ante fuerza bruta por SSH (regla nativa 5712) -->
+<active-response>
+  <command>firewall-drop</command>
+  <location>local</location>
+  <rules_id>5712</rules_id>
+  <timeout>600</timeout>
+</active-response>

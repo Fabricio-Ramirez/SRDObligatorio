@@ -8,16 +8,16 @@
 # --profile vulnmgmt-server and --wazuh-host instead (see README, section 12).
 
 # Wazuh server (manager + indexer). Its address is also the SIEM of the hardening.
-vulnmgmt_wazuh_host: 10.0.10.12
-hardening_siem_host: 10.0.10.12
+vulnmgmt_wazuh_host: 10.10.30.10
+hardening_siem_host: 10.10.30.10
 
 # Root CA of the Wazuh indexer, copied from the Wazuh server
 # (/etc/wazuh-indexer/certs/root-ca.pem).
 vulnmgmt_indexer_ca_source: /root/wazuh-root-ca.pem
 
-# Only if the indexer certificate does not contain 10.0.10.12 in its
+# Only if the indexer certificate does not contain 10.10.30.10 in its
 # subjectAltName: one of the names it does contain (added to /etc/hosts).
 # vulnmgmt_indexer_tls_name: wazuh-indexer
 
 # Networks allowed to open the dashboard (bastion / admin VPN). Empty = any.
-vulnmgmt_allowed_networks: ["10.0.10.10/32"]
+vulnmgmt_allowed_networks: ["10.10.99.10/32"]

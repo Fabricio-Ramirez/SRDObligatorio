@@ -1,0 +1,50 @@
+<!-- Decoder para pfSense en formato RFC 5424 - Obligatorio SRD 2026 -->
+
+<decoder name="pfsense-filterlog">
+  <prematch type="pcre2"> filterlog \d+ </prematch>
+</decoder>
+
+<decoder name="pfsense-filterlog-ports">
+  <parent>pfsense-filterlog</parent>
+  <regex type="pcre2">(\S+) filterlog \d+ \S+ \S+ \d+,[^,]*,[^,]*,(\d+),([^,]+),([^,]+),([^,]+),([^,]+),4,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,(\d+),([^,]+),[^,]*,([^,]+),([^,]+),(\d+),(\d+)</regex>
+  <order>system_name,tracker,interface,reason,action,direction,protocol_id,protocol,srcip,dstip,srcport,dstport</order>
+</decoder>
+
+<decoder name="pfsense-filterlog-noports">
+  <parent>pfsense-filterlog</parent>
+  <regex type="pcre2">(\S+) filterlog \d+ \S+ \S+ \d+,[^,]*,[^,]*,(\d+),([^,]+),([^,]+),([^,]+),([^,]+),4,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,(\d+),([^,]+),[^,]*,([^,]+),([^,]+)</regex>
+  <order>system_name,tracker,interface,reason,action,direction,protocol_id,protocol,srcip,dstip</order>
+</decoder>
+
+<!-- OpenVPN de pfSense en formato RFC 5424 - Obligatorio SRD 2026 -->
+<decoder name="pfsense-openvpn">
+  <prematch type="pcre2"> openvpn \d+ </prematch>
+</decoder>
+
+<decoder name="pfsense-openvpn-sesion">
+  <parent>pfsense-openvpn</parent>
+  <prematch type="pcre2">openvpn server '[^']+' user </prematch>
+  <regex type="pcre2">(\S+) openvpn \d+ \S+ \S+ openvpn server '([^']+)' user '([^']+)' address '([^:']+):(\d+)' - (\w+)</regex>
+  <order>system_name,extra_data,srcuser,srcip,srcport,status</order>
+</decoder>
+
+<decoder name="pfsense-openvpn-auth-ok">
+  <parent>pfsense-openvpn</parent>
+  <prematch type="pcre2">user '[^']+' authenticated</prematch>
+  <regex type="pcre2">(\S+) openvpn \d+ \S+ \S+ user '([^']+)' authenticated</regex>
+  <order>system_name,srcuser</order>
+</decoder>
+
+<decoder name="pfsense-openvpn-auth-fail">
+  <parent>pfsense-openvpn</parent>
+  <prematch type="pcre2">could not authenticate</prematch>
+  <regex type="pcre2">(\S+) openvpn \d+ \S+ \S+ user '([^']+)' could not authenticate</regex>
+  <order>system_name,srcuser</order>
+</decoder>
+
+<decoder name="pfsense-openvpn-inicio">
+  <parent>pfsense-openvpn</parent>
+  <prematch type="pcre2">Peer Connection Initiated</prematch>
+  <regex type="pcre2">(\S+) openvpn \d+ \S+ \S+ ([\d.]+):(\d+) \[([^\]]+)\] Peer Connection Initiated</regex>
+  <order>system_name,srcip,srcport,srcuser</order>
+</decoder>

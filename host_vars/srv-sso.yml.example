@@ -1,0 +1,23 @@
+# Example host_vars for srv-sso (10.10.30.30): Keycloak 26 (HTTPS 8443) and
+# Grafana (HTTPS 3000), single sign-on against FreeIPA. The server is a
+# FreeIPA client. Rename to host_vars/<inventory_hostname>.yml
+# (e.g. host_vars/srv-sso.yml), or host_vars/localhost.yml when bootstrap.sh
+# runs on the server itself.
+
+# SSH only from the bastion; the other servers are reached through it (ssh -J).
+hardening_ssh_allowed_networks: ["10.10.99.10/32"]
+
+# sysadmins is a FreeIPA group: directory administrators may log in, besides
+# the local wheel group.
+hardening_ssh_allow_groups: [wheel, sysadmins]
+
+# Keycloak (8443) and Grafana (3000), both over HTTPS.
+hardening_firewall_allowed_ports: ["8443/tcp", "3000/tcp"]
+
+# Documented exception (CIS 2.1.1, 2.1.9, 2.1.12): kept on this server, which
+# is a FreeIPA client.
+hardening_packages_keep: [autofs, nfs-utils, rpcbind]
+
+# Updates are applied by hand in a maintenance window (snapshot first): an
+# interrupted automatic update left the FreeIPA server down in the lab.
+hardening_dnf_automatic: false

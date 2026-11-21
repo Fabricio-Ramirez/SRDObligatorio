@@ -12,6 +12,10 @@ Wazuh (`sudo ./bootstrap.sh --component vulnmgmt`), con panel web propio, priori
 y flujos no-code (n8n) que arman el plan de remediación priorizado. Ver [12. Gestión de vulnerabilidades](#12-gestión-de-vulnerabilidades-punto-5)
 y la documentación completa en [`docs/vulnmgmt.md`](docs/vulnmgmt.md).
 
+La carpeta [`siem/`](siem/README.md) guarda la configuración de Wazuh desplegada en la maqueta (decoders, reglas
+100100-100117 y el script de respuesta activa que deshabilita cuentas en FreeIPA), y `host_vars/` tiene un ejemplo por
+servidor con las excepciones reales de cada uno.
+
 ## Índice
 
 1. [Alcance y referencia](#1-alcance-y-referencia)
@@ -96,13 +100,13 @@ Conectarse al servidor con el usuario administrador y ejecutar:
 4. (Opcional) Ver qué cambiaría sin aplicar nada (modo simulación):
 
    ```bash
-   sudo ./bootstrap.sh --siem-host 10.0.10.12 --check
+   sudo ./bootstrap.sh --siem-host 10.10.30.10 --check
    ```
 
 5. Aplicar el endurecimiento (reemplazar la IP por la del manager de Wazuh):
 
    ```bash
-   sudo ./bootstrap.sh --siem-host 10.0.10.12
+   sudo ./bootstrap.sh --siem-host 10.10.30.10
    ```
 
 6. Reiniciar si el resumen final dice `REBOOT REQUIRED` (la primera ejecución normalmente lo pide):
@@ -126,7 +130,7 @@ playbook de la versión detectada: `site.yml` en Rocky 9 o `site-rocky10.yml` en
 Clona el repositorio en `/opt/srd-hardening` y lo ejecuta:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Fabricio-Ramirez/SRDObligatorio/HEAD/bootstrap.sh | sudo bash -s -- --siem-host 10.0.10.12
+curl -fsSL https://raw.githubusercontent.com/Fabricio-Ramirez/SRDObligatorio/HEAD/bootstrap.sh | sudo bash -s -- --siem-host 10.10.30.10
 ```
 
 Opciones de `bootstrap.sh` (ver `./bootstrap.sh --help`):
@@ -157,7 +161,7 @@ Opciones de `bootstrap.sh` (ver `./bootstrap.sh --help`):
 3. Ejecutar contra todos los servidores Rocky 9:
 
    ```bash
-   ansible-playbook -i inventory/hosts.ini site.yml -e hardening_siem_host=10.0.10.12 --ask-become-pass
+   ansible-playbook -i inventory/hosts.ini site.yml -e hardening_siem_host=10.10.30.10 --ask-become-pass
    ```
 
    Para servidores Rocky 10, el mismo comando con `site-rocky10.yml`. Cada rol se detiene en el
@@ -167,7 +171,8 @@ Opciones de `bootstrap.sh` (ver `./bootstrap.sh --help`):
 
 Todas las variables, con su referencia CIS, están documentadas en `roles/hardening/defaults/main.yml`.
 Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor en `host_vars/<servidor>.yml`
-(ver los ejemplos `host_vars/srv-bastion.yml.example` y `host_vars/srv-siem.yml.example` para el servidor Wazuh).
+(ver los ejemplos `host_vars/srv-bastion.yml.example`, `host_vars/srv-sso.yml.example` y
+`host_vars/srv-siem.yml.example` para el servidor Wazuh).
 
 | Variable | Defecto | Uso |
 |---|---|---|
@@ -181,6 +186,7 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
 | `hardening_firewall_allowed_services` / `_ports` | `[ssh]` / `[]` | Servicios/puertos según el rol del servidor (p. ej. `["443/tcp"]`, Wazuh manager `["1514/tcp","1515/tcp","55000/tcp"]`). |
 | `hardening_packages_absent` | lista CIS 2.1/2.2 | Paquetes que se desinstalan. |
 | `hardening_packages_keep` | `[]` | Paquetes de la lista anterior que **este** servidor necesita (excepción documentada), p. ej. `[nginx]` en un servidor web o en el servidor Wazuh (panel de vulnerabilidades). |
+| `hardening_dnf_automatic` | `true` | `false` en servidores críticos (p. ej. FreeIPA o SSO): las actualizaciones se aplican a mano, con snapshot previo. |
 | `hardening_ip_forwarding` | `false` | `true` sólo en routers, gateways VPN o hosts de contenedores. |
 | `hardening_grub_password_pbkdf2` | `""` | Hash de `grub2-mkpasswd-pbkdf2` (CIS 1.4.1); guardarlo con `ansible-vault`. |
 | `hardening_audit_immutable` | `true` | Reglas de auditoría inmutables (CIS 6.3.3.20): cambiarlas requiere reiniciar. |
@@ -199,7 +205,8 @@ Los valores del sitio van en `group_vars/all.yml` y las diferencias por servidor
 │   ├── localhost.ini            # Ejecución local (bootstrap.sh)
 │   └── hosts.ini.example        # Ejecución remota desde un nodo de control
 ├── group_vars/all.yml           # Parámetros del sitio (SIEM, redes de administración, NTP)
-├── host_vars/srv-bastion.yml.example
+├── host_vars/srv-bastion.yml.example  # Salto: reenvío TCP para ssh -J
+├── host_vars/srv-sso.yml.example      # Keycloak + Grafana: puertos 8443 y 3000
 ├── host_vars/srv-siem.yml.example  # Excepciones del servidor Wazuh (conserva nginx)
 ├── scripts/verify.sh            # Evidencia post-endurecimiento (+ escaneo OpenSCAP opcional)
 └── roles/hardening/
@@ -240,6 +247,12 @@ Punto 5 — Gestión de vulnerabilidades (ver sección 12 y docs/vulnmgmt.md)
 ├── vulnmgmt/wazuh/              # Reglas del SIEM (100800-100808)
 ├── vulnmgmt/n8n/priorizar-soluciones.js     # Script no-code: triaje y soluciones propuestas
 └── vulnmgmt/n8n/tests/          # Pruebas del script con Node (ver su README)
+
+SIEM — reglas propias y respuesta activa (ver siem/README.md)
+├── siem/wazuh/local_decoder.xml       # Decoders de pfSense (filterlog y OpenVPN, RFC 5424)
+├── siem/wazuh/local_rules.xml         # Reglas 100100-100117
+├── siem/wazuh/ossec-active-response.xml  # Fragmento del ossec.conf del manager
+└── siem/active-response/ipa-disable-user.sh  # Deshabilita la cuenta en FreeIPA y la rehabilita al vencer el plazo
 ```
 
 ## 7. Controles CIS implementados

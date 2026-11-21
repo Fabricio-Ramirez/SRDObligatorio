@@ -5,7 +5,7 @@
 # (see host_vars/README.md).
 
 # SIEM integration (mandatory): Wazuh manager address. Can also be passed on
-# the command line: bootstrap.sh --siem-host 10.0.10.12
+# the command line: bootstrap.sh --siem-host 10.10.30.10
 hardening_siem_type: wazuh
 hardening_siem_host: ""
 
