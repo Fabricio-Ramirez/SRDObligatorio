@@ -12,6 +12,9 @@ Wazuh (`sudo ./bootstrap.sh --component vulnmgmt`), con panel web propio, priori
 y flujos no-code (n8n) que arman el plan de remediación priorizado. Ver [12. Gestión de vulnerabilidades](#12-gestión-de-vulnerabilidades-punto-5)
 y la documentación completa en [`docs/vulnmgmt.md`](docs/vulnmgmt.md).
 
+El informe del obligatorio (versión 3.2, en Word) está en
+[`docs/Obligatorio-SRD-2026-Montero-Ramirez-v3.2.docx`](docs/Obligatorio-SRD-2026-Montero-Ramirez-v3.2.docx).
+
 La carpeta [`siem/`](siem/README.md) guarda la configuración de Wazuh desplegada en la maqueta (decoders, reglas
 100100-100117 y el script de respuesta activa que deshabilita cuentas en FreeIPA), y `host_vars/` tiene un ejemplo por
 servidor con las excepciones reales de cada uno.
