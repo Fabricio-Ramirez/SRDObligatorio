@@ -90,3 +90,26 @@
   </rule>
 
 </group>
+<!-- SSO: fuerza bruta contra el login de Keycloak - Obligatorio SRD 2026 -->
+<group name="keycloak,sso,authentication,">
+
+  <rule id="100120" level="0">
+    <decoded_as>keycloak-event</decoded_as>
+    <description>Keycloak: evento de autenticacion</description>
+  </rule>
+
+  <rule id="100121" level="5">
+    <if_sid>100120</if_sid>
+    <status>^LOGIN_ERROR$</status>
+    <description>Keycloak: inicio de sesion fallido de $(srcuser) desde $(srcip) ($(extra_data))</description>
+    <group>authentication_failed,</group>
+  </rule>
+
+  <rule id="100122" level="10" frequency="5" timeframe="120">
+    <if_matched_sid>100121</if_matched_sid>
+    <same_srcip />
+    <description>Keycloak: cinco inicios de sesion fallidos desde $(srcip) en dos minutos - posible fuerza bruta contra el SSO</description>
+    <group>authentication_failures,</group>
+  </rule>
+
+</group>

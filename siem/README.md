@@ -37,6 +37,9 @@ sudo /var/ossec/bin/wazuh-analysisd -t && sudo systemctl restart wazuh-manager &
 | 100115 | 8 | Conexión con el perfil de administradores (servidor `ovpns2`) |
 | 100116 | 3 | Inicio de negociación de un cliente VPN |
 | **100117** | **10** | **3 autenticaciones fallidas del mismo usuario en 3 minutos**: dispara la respuesta activa 1 |
+| 100120 | 0 | Agrupa los eventos de Keycloak (srv-sso) |
+| 100121 | 5 | Inicio de sesión fallido en Keycloak, con usuario, IP y motivo |
+| **100122** | **10** | **5 inicios de sesión fallidos desde la misma IP en 2 minutos** (fuerza bruta o rociado de contraseñas contra el SSO): dispara la respuesta activa 2 |
 
 La 100117 depende de la 100113 con `<same_srcuser />`: cuenta **fallos de un mismo usuario**, no conexiones. Una versión
 anterior contaba negociaciones desde una IP y bloqueaba a usuarios legítimos que se reconectaban. Hubo además otra regla
@@ -79,7 +82,17 @@ Registro en srv-ipa: `sudo tail -f /var/ossec/logs/active-responses.log`. Secuen
 20:11:25 ipa-disable-user: cuenta 'jperez' rehabilitada al vencer el plazo
 ```
 
-## Respuesta activa 2: bloquear la IP de origen
+## Respuesta activa 2: bloquear en srv-sso a quien ataca el SSO
 
-Ante la regla nativa 5712 (fuerza bruta por SSH), el equipo atacado ejecuta `firewall-drop` y descarta la IP de origen
-durante 600 segundos.
+Keycloak escribe sus eventos en `/opt/keycloak/data/log/keycloak.log` (`log=console,file` en `keycloak.conf`), y el agente
+de srv-sso lee ese archivo. Cada inicio de sesión fallido llega como `LOGIN_ERROR` con usuario, IP y motivo (regla
+100121). Con cinco desde la misma IP en dos minutos (regla 100122), el agente 003 ejecuta `firewall-drop` y descarta todo
+el tráfico de esa IP durante 300 segundos. La regla agrupa por IP y no por usuario: detecta también el rociado de
+contraseñas (una contraseña contra muchos usuarios). El servidor de salto (10.10.99.10) está en `<white_list>`.
+
+Prueba del 23/11, desde la notebook de administración con usuarios inexistentes:
+
+```
+20:58:30 firewall-drop add 10.10.99.100 (regla 100122)   -> el navegador recibe ERR_CONNECTION_TIMED_OUT
+21:03:31 firewall-drop delete 10.10.99.100               -> Grafana vuelve a responder
+```

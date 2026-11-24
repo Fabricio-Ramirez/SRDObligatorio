@@ -48,3 +48,14 @@
   <regex type="pcre2">(\S+) openvpn \d+ \S+ \S+ ([\d.]+):(\d+) \[([^\]]+)\] Peer Connection Initiated</regex>
   <order>system_name,srcip,srcport,srcuser</order>
 </decoder>
+
+<!-- Keycloak: eventos de autenticacion (srv-sso, /opt/keycloak/data/log/keycloak.log) - Obligatorio SRD 2026 -->
+<decoder name="keycloak-event">
+  <prematch type="pcre2">\[org\.keycloak\.events\]</prematch>
+</decoder>
+
+<decoder name="keycloak-event-campos">
+  <parent>keycloak-event</parent>
+  <regex type="pcre2">type="([A-Z_]+)".*?ipAddress="([^"]+)"(?:.*?error="([^"]+)")?(?:.*?username="([^"]*)")?</regex>
+  <order>status,srcip,extra_data,srcuser</order>
+</decoder>

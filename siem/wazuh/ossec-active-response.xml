@@ -18,10 +18,25 @@
   <timeout>300</timeout>
 </active-response>
 
-<!-- Respuesta activa 2: bloquear la IP de origen ante fuerza bruta por SSH (regla nativa 5712) -->
+<!-- Respuesta activa 2: bloquear en srv-sso (agente 003) la IP que hace fuerza bruta contra Keycloak (regla propia 100122) -->
 <active-response>
+  <disabled>no</disabled>
   <command>firewall-drop</command>
-  <location>local</location>
-  <rules_id>5712</rules_id>
-  <timeout>600</timeout>
+  <location>defined-agent</location>
+  <agent_id>003</agent_id>
+  <rules_id>100122</rules_id>
+  <timeout>300</timeout>
 </active-response>
+
+<!-- Dentro de <global>: el servidor de salto nunca se bloquea -->
+<!-- <white_list>10.10.99.10</white_list> -->
+
+<!-- En el agente de srv-sso (/var/ossec/etc/ossec.conf): leer los eventos de Keycloak -->
+<!--
+<ossec_config>
+  <localfile>
+    <log_format>syslog</log_format>
+    <location>/opt/keycloak/data/log/keycloak.log</location>
+  </localfile>
+</ossec_config>
+-->
